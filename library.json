@@ -1,0 +1,41 @@
+{
+    "name": "libsdi12",
+    "version": "0.2.0",
+    "description": "The most complete, portable SDI-12 v1.4 protocol library. Pure C, sensor + master, 98 tests, zero dependencies.",
+    "keywords": [
+        "sdi-12", "sdi12", "sensor", "serial", "environmental",
+        "protocol", "data-logger", "master", "slave", "crc",
+        "1200-baud", "half-duplex", "measurement", "hydrology"
+    ],
+    "license": "MIT",
+    "homepage": "https://github.com/phillipweinstock/libsdi12",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/phillipweinstock/libsdi12.git"
+    },
+    "authors": [
+        {
+            "name": "Phillip Weinstock",
+            "url": "https://github.com/phillipweinstock",
+            "maintainer": true
+        }
+    ],
+    "frameworks": "*",
+    "platforms": "*",
+    "headers": ["libsdi12.h", "sdi12.h", "sdi12_easy.h"],
+    "build": {
+        "flags": ["-std=c11"],
+        "srcDir": ".",
+        "includeDir": ".",
+        "srcFilter": ["+<*.c>", "-<test/>", "-<examples/>"]
+    },
+    "examples": [
+        "examples/*"
+    ],
+    "export": {
+        "exclude": [
+            "test/test_sdi12",
+            "test/test_sdi12.exe"
+        ]
+    }
+}
