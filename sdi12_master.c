@@ -54,6 +54,20 @@ static sdi12_err_t recv_response(sdi12_master_ctx_t *ctx, uint32_t timeout_ms)
     return SDI12_OK;
 }
 
+/** Read exactly `count` bytes using the recv callback. */
+static sdi12_err_t recv_exact(sdi12_master_ctx_t *ctx,
+                               char *buf, size_t count, uint32_t timeout_ms)
+{
+    size_t got = 0;
+    while (got < count) {
+        size_t n = ctx->cb.recv(buf + got, count - got,
+                                 timeout_ms, ctx->cb.user_data);
+        if (n == 0) return SDI12_ERR_TIMEOUT;
+        got += n;
+    }
+    return SDI12_OK;
+}
+
 /** Parse numeric digits from a string. Returns number of digits consumed. */
 static int parse_digits(const char *s, size_t max, uint32_t *out)
 {
@@ -686,6 +700,92 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
 
     memcpy(raw_buf, ctx->resp_buf + 1, data_len);
     *raw_len = data_len;
+
+    return SDI12_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  High-Volume Binary Data Retrieval (§5.2)                                 */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
+                                            char addr, uint16_t page,
+                                            sdi12_bintype_t *out_type,
+                                            void *out_payload,
+                                            size_t *out_len)
+{
+    if (!ctx || !out_type || !out_payload || !out_len)
+        return SDI12_ERR_INVALID_COMMAND;
+    if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    /* Send aDBn! command */
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "%cDB%u!", addr, page);
+
+    sdi12_err_t err = send_command(ctx, cmd);
+    if (err != SDI12_OK) return err;
+
+    /*
+     * Binary packet format per §5.2 Table 14:
+     *   addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE)
+     * All fields after address are raw binary (8 data bits, no parity).
+     */
+
+    /* Read header: address(1) + packet_size(2) = 3 bytes */
+    char hdr[4];
+    err = recv_exact(ctx, hdr, 3, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    uint16_t pkt_size = (uint8_t)hdr[1] | ((uint16_t)(uint8_t)hdr[2] << 8);
+
+    /* Read data type (1 byte) */
+    char type_byte;
+    err = recv_exact(ctx, &type_byte, 1, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    *out_type = (sdi12_bintype_t)(uint8_t)type_byte;
+
+    /* Read payload + CRC into a local buffer */
+    size_t tail_len = (size_t)pkt_size + 2; /* payload + CRC(2) */
+    char tail[SDI12_BIN_MAX_PAYLOAD + 2];
+    if (pkt_size > SDI12_BIN_MAX_PAYLOAD) return SDI12_ERR_BUFFER_OVERFLOW;
+
+    err = recv_exact(ctx, tail, tail_len, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    /* Verify CRC: computed over addr + pkt_size(2) + type(1) + payload(N) */
+    size_t crc_data_len = 4 + (size_t)pkt_size;
+
+    /* Assemble contiguous CRC input into resp_buf for computation.
+     * Total ≤ 4 + 1000 = 1004 which exceeds resp_buf.  Use a different
+     * approach: compute CRC incrementally over hdr(3) + type(1) + payload. */
+    {
+        /* Compute CRC over header bytes + type byte + payload bytes */
+        uint16_t crc = 0;
+        /* We need a contiguous buffer.  Build one from the pieces: */
+        /* For small payloads (our typical case), stack is fine. */
+        uint8_t crc_buf[SDI12_BIN_MAX_PAYLOAD + SDI12_BIN_PKT_OVERHEAD];
+        memcpy(crc_buf, hdr, 3);
+        crc_buf[3] = (uint8_t)type_byte;
+        if (pkt_size > 0)
+            memcpy(crc_buf + 4, tail, pkt_size);
+
+        crc = sdi12_crc16(crc_buf, crc_data_len);
+
+        uint16_t received_crc = (uint8_t)tail[pkt_size] |
+                                ((uint16_t)(uint8_t)tail[pkt_size + 1] << 8);
+
+        if (crc != received_crc) return SDI12_ERR_CRC_MISMATCH;
+    }
+
+    /* Copy payload to output */
+    size_t copy_len = pkt_size;
+    if (copy_len > *out_len) copy_len = *out_len;
+    if (copy_len > 0) memcpy(out_payload, tail, copy_len);
+    *out_len = pkt_size;
+
+    /* Store total packet size for timing layer access */
+    ctx->resp_len = 3 + 1 + tail_len;
 
     return SDI12_OK;
 }

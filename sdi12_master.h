@@ -323,6 +323,27 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
                                       char *raw_buf, size_t *raw_len);
 
 /**
+ * Retrieve a high-volume binary data page (aDBn!) per §5.2.
+ *
+ * Sends "aDB0!" through "aDB999!" and reads a binary packet:
+ *   addr(1) + packet_size(2 LE) + type(1) + payload(N) + CRC(2 LE).
+ * The CRC is always present and verified.
+ *
+ * @param ctx         Master context.
+ * @param addr        Sensor address.
+ * @param page        Data page 0–999.
+ * @param out_type    [out] Binary data type.
+ * @param out_payload [out] Payload buffer.
+ * @param out_len     [in] Buffer capacity / [out] actual payload bytes.
+ * @return SDI12_OK on success, SDI12_ERR_CRC_MISMATCH on CRC failure.
+ */
+sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
+                                            char addr, uint16_t page,
+                                            sdi12_bintype_t *out_type,
+                                            void *out_payload,
+                                            size_t *out_len);
+
+/**
  * Decode the size in bytes of a single binary value for a given type.
  *
  * @param type  Binary data type.

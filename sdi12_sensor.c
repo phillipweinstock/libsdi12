@@ -262,6 +262,81 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
     return SDI12_OK;
 }
 
+/**
+ * Handle aDB0!–aDB999! — Send binary data packet per §5.2.
+ *
+ * Binary packet format (Table 14):
+ *   addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE)
+ * CRC is always present, computed over addr+size+type+payload.
+ * No CR/LF terminator.
+ */
+static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
+                                            uint16_t page)
+{
+    char *pkt = ctx->resp_buf;
+
+    if (!ctx->data_available || ctx->cb.format_binary_page == NULL) {
+        /* Empty binary packet: addr + 0x0000 + 0x00 + CRC(2) = 6 bytes */
+        pkt[0] = ctx->address;
+        pkt[1] = 0x00;  /* pkt_size LSB */
+        pkt[2] = 0x00;  /* pkt_size MSB */
+        pkt[3] = 0x00;  /* type = invalid */
+        uint16_t crc = sdi12_crc16(pkt, 4);
+        pkt[4] = (char)(crc & 0xFF);
+        pkt[5] = (char)((crc >> 8) & 0xFF);
+        ctx->resp_len = 6;
+        send_response(ctx);
+        return SDI12_OK;
+    }
+
+    /*
+     * Call the format_binary_page callback.  It writes:
+     *   buf[1] = type byte
+     *   buf[2..] = raw payload bytes
+     *   returns number of bytes written starting at buf[1] (type + payload)
+     */
+    char tmpbuf[SDI12_MAX_RESPONSE_LEN];
+    tmpbuf[0] = ctx->address;
+    size_t cb_bytes = ctx->cb.format_binary_page(
+        page, ctx->data_cache, ctx->data_cache_count,
+        tmpbuf, sizeof(tmpbuf), ctx->cb.user_data);
+
+    if (cb_bytes == 0) {
+        /* Empty page */
+        pkt[0] = ctx->address;
+        pkt[1] = 0x00;
+        pkt[2] = 0x00;
+        pkt[3] = 0x00;
+        uint16_t crc = sdi12_crc16(pkt, 4);
+        pkt[4] = (char)(crc & 0xFF);
+        pkt[5] = (char)((crc >> 8) & 0xFF);
+        ctx->resp_len = 6;
+        send_response(ctx);
+        return SDI12_OK;
+    }
+
+    /* cb_bytes = type(1) + raw_data(N), so payload_size = cb_bytes - 1 */
+    uint8_t data_type = (uint8_t)tmpbuf[1];
+    uint16_t payload_size = (uint16_t)(cb_bytes - 1);
+
+    /* Build binary packet: addr + pkt_size(2 LE) + type + payload + CRC(2 LE) */
+    pkt[0] = ctx->address;
+    pkt[1] = (char)(payload_size & 0xFF);
+    pkt[2] = (char)((payload_size >> 8) & 0xFF);
+    pkt[3] = (char)data_type;
+    if (payload_size > 0)
+        memcpy(pkt + 4, tmpbuf + 2, payload_size);
+
+    size_t data_end = 4 + (size_t)payload_size;
+    uint16_t crc = sdi12_crc16(pkt, data_end);
+    pkt[data_end]     = (char)(crc & 0xFF);
+    pkt[data_end + 1] = (char)((crc >> 8) & 0xFF);
+
+    ctx->resp_len = data_end + 2;
+    send_response(ctx);
+    return SDI12_OK;
+}
+
 /** Handle aD0!–aD9! — Send data. */
 static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
 {
@@ -732,9 +807,20 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
     }
 
     case 'D': {
-        /* aD0!–aD9! */
+        /* aD0!–aD9!, aDB0!–aDB999! */
         if (cmdlen >= 3) {
-            /* Parse page number (supports D0–D999 for high-volume) */
+            /* Check for aDBn! (binary data packet per §5.2) */
+            if (cmd[2] == 'B') {
+                uint16_t page = 0;
+                for (size_t i = 3; i < cmdlen; i++) {
+                    if (cmd[i] >= '0' && cmd[i] <= '9')
+                        page = page * 10 + (uint16_t)(cmd[i] - '0');
+                    else
+                        break;
+                }
+                return handle_send_binary_data(ctx, page);
+            }
+            /* aDn! — standard ASCII data */
             uint16_t page = 0;
             for (size_t i = 2; i < cmdlen; i++) {
                 if (cmd[i] >= '0' && cmd[i] <= '9') {

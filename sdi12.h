@@ -55,6 +55,12 @@ extern "C" {
 /** Maximum data pages for high-volume commands. */
 #define SDI12_MAX_HV_DATA_PAGES 1000
 
+/** Maximum binary data payload per §5.2 (bytes). */
+#define SDI12_BIN_MAX_PAYLOAD 1000
+
+/** Binary packet overhead: addr(1) + pkt_size(2) + type(1) + CRC(2). */
+#define SDI12_BIN_PKT_OVERHEAD 6
+
 /** Max chars of <values> in a D response after M/V commands. */
 #define SDI12_M_VALUES_MAX_CHARS 35
 
