@@ -248,6 +248,17 @@ typedef struct {
 } sdi12_data_response_t;
 
 /**
+ * @brief Parsed parameter metadata from aIM_nnn! / aIC_nnn! response.
+ *
+ * Response format: "a,SHEF,units;\r\n"
+ */
+typedef struct {
+    char address;
+    char shef[8];    /**< SHEF code (e.g. "TA", "PA"). Null-terminated. */
+    char units[24];  /**< Units string (e.g. "C", "kPa"). Null-terminated. */
+} sdi12_param_meta_response_t;
+
+/**
  * @brief Parsed identification response (master-side use).
  */
 typedef struct {

@@ -257,6 +257,80 @@ sdi12_err_t sdi12_master_verify(sdi12_master_ctx_t *ctx,
                                  char addr, sdi12_meas_response_t *resp);
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/*  Identify Measurement Metadata                                            */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Identify measurement capability.
+ * Sends aIM!, aIMn!, aIMC!, aIMCn!, aIC!, aICn!, aICC!, aICCn!,
+ *       aIV!, aIHA!, aIHB!, aIR0!–aIR9!.
+ *
+ * @param ctx       Master context.
+ * @param addr      Sensor address.
+ * @param cmd_body  Command body after 'aI' (e.g. "M", "M1", "MC", "C",
+ *                  "V", "HA", "HB", "R0"–"R9").
+ * @param type      Expected response format:
+ *                  - SDI12_MEAS_STANDARD for M/V (atttn, n=1 digit)
+ *                  - SDI12_MEAS_CONCURRENT for C/R (atttnn, n=2 digits)
+ *                  - SDI12_MEAS_HIGHVOL_ASCII or _BINARY for H (atttnnn)
+ * @param resp      [out] Parsed measurement response (ttt, count).
+ * @return SDI12_OK on success, SDI12_ERR_TIMEOUT if not supported.
+ */
+sdi12_err_t sdi12_master_identify_measurement(sdi12_master_ctx_t *ctx,
+                                               char addr,
+                                               const char *cmd_body,
+                                               sdi12_meas_type_t type,
+                                               sdi12_meas_response_t *resp);
+
+/**
+ * Query per-parameter metadata.
+ * Sends aIM_nnn!, aIMC_nnn!, aIC_nnn!, etc.
+ * Parses "a,SHEF,units;\r\n" response.
+ *
+ * @param ctx       Master context.
+ * @param addr      Sensor address.
+ * @param cmd_body  Command body between 'aI' and '_' (e.g. "M", "MC", "C").
+ * @param param_num 1-based parameter number.
+ * @param resp      [out] Parsed parameter metadata.
+ * @return SDI12_OK on success.
+ */
+sdi12_err_t sdi12_master_identify_param(sdi12_master_ctx_t *ctx,
+                                         char addr,
+                                         const char *cmd_body,
+                                         uint16_t param_num,
+                                         sdi12_param_meta_response_t *resp);
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  High-Volume Data Retrieval                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Request high-volume data page (D0–D999).
+ * Sends "aD0!" through "aD999!" and returns the raw response.
+ *
+ * For ASCII responses: caller should use sdi12_master_parse_data_values().
+ * For binary responses: caller should use sdi12_master_parse_binary_page().
+ *
+ * @param ctx       Master context.
+ * @param addr      Sensor address.
+ * @param page      Data page 0–999.
+ * @param raw_buf   [out] Raw response (after address).
+ * @param raw_len   [in] Buffer capacity / [out] response length.
+ * @return SDI12_OK on success.
+ */
+sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
+                                      char addr, uint16_t page,
+                                      char *raw_buf, size_t *raw_len);
+
+/**
+ * Decode the size in bytes of a single binary value for a given type.
+ *
+ * @param type  Binary data type.
+ * @return Size in bytes (1–8), or 0 for invalid.
+ */
+size_t sdi12_bintype_size(sdi12_bintype_t type);
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /*  Extended / Transparent Commands                                          */
 /* ────────────────────────────────────────────────────────────────────────── */
 

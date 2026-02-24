@@ -374,6 +374,87 @@ sdi12_err_t sdi12_master_verify(sdi12_master_ctx_t *ctx,
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/*  Identify Measurement Metadata                                            */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+sdi12_err_t sdi12_master_identify_measurement(sdi12_master_ctx_t *ctx,
+                                               char addr,
+                                               const char *cmd_body,
+                                               sdi12_meas_type_t type,
+                                               sdi12_meas_response_t *resp)
+{
+    if (!ctx || !cmd_body || !resp) return SDI12_ERR_INVALID_COMMAND;
+    if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    /* Build command: aI<cmd_body>!  e.g. "0IM!", "0IC!", "0IHA!" */
+    char cmd[SDI12_CMD_MAX_CHARS + 4];
+    snprintf(cmd, sizeof(cmd), "%cI%s!", addr, cmd_body);
+
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+    return sdi12_master_parse_meas_response(ctx->resp_buf, len, type, resp);
+}
+
+sdi12_err_t sdi12_master_identify_param(sdi12_master_ctx_t *ctx,
+                                         char addr,
+                                         const char *cmd_body,
+                                         uint16_t param_num,
+                                         sdi12_param_meta_response_t *resp)
+{
+    if (!ctx || !cmd_body || !resp) return SDI12_ERR_INVALID_COMMAND;
+    if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    memset(resp, 0, sizeof(*resp));
+
+    /* Build command: aI<cmd_body>_nnn!  e.g. "0IM_001!" */
+    char cmd[SDI12_CMD_MAX_CHARS + 4];
+    snprintf(cmd, sizeof(cmd), "%cI%s_%03u!", addr, cmd_body, param_num);
+
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+
+    /* Response format: "a,SHEF,units;" (min 4 chars: a,X,;) */
+    if (len < 4) return SDI12_ERR_PARSE_FAILED;
+    if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
+
+    resp->address = ctx->resp_buf[0];
+
+    /* Find first comma after address */
+    const char *p = ctx->resp_buf + 1;
+    const char *end = ctx->resp_buf + len;
+
+    if (*p != ',') return SDI12_ERR_PARSE_FAILED;
+    p++;
+
+    /* Extract SHEF code (up to next comma) */
+    const char *shef_start = p;
+    while (p < end && *p != ',') p++;
+    if (p >= end) return SDI12_ERR_PARSE_FAILED;
+
+    size_t shef_len = (size_t)(p - shef_start);
+    if (shef_len >= sizeof(resp->shef)) shef_len = sizeof(resp->shef) - 1;
+    memcpy(resp->shef, shef_start, shef_len);
+    resp->shef[shef_len] = '\0';
+
+    p++; /* skip comma */
+
+    /* Extract units (up to semicolon or end) */
+    const char *units_start = p;
+    while (p < end && *p != ';') p++;
+
+    size_t units_len = (size_t)(p - units_start);
+    if (units_len >= sizeof(resp->units)) units_len = sizeof(resp->units) - 1;
+    memcpy(resp->units, units_start, units_len);
+    resp->units[units_len] = '\0';
+
+    return SDI12_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /*  Extended Commands                                                        */
 /* ────────────────────────────────────────────────────────────────────────── */
 
@@ -521,4 +602,51 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
     }
 
     return SDI12_OK;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  High-Volume Data Retrieval                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
+                                      char addr, uint16_t page,
+                                      char *raw_buf, size_t *raw_len)
+{
+    if (!ctx || !raw_buf || !raw_len) return SDI12_ERR_INVALID_COMMAND;
+    if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    char cmd[12];
+    snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
+
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err != SDI12_OK) return err;
+
+    /* Response: a<data>\r\n — skip address, trim CRLF */
+    size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+    if (len < 1) return SDI12_ERR_PARSE_FAILED;
+
+    size_t data_len = len - 1; /* skip address */
+    if (data_len > *raw_len) data_len = *raw_len;
+
+    memcpy(raw_buf, ctx->resp_buf + 1, data_len);
+    *raw_len = data_len;
+
+    return SDI12_OK;
+}
+
+size_t sdi12_bintype_size(sdi12_bintype_t type)
+{
+    switch (type) {
+    case SDI12_BINTYPE_INT8:    return 1;
+    case SDI12_BINTYPE_UINT8:   return 1;
+    case SDI12_BINTYPE_INT16:   return 2;
+    case SDI12_BINTYPE_UINT16:  return 2;
+    case SDI12_BINTYPE_INT32:   return 4;
+    case SDI12_BINTYPE_UINT32:  return 4;
+    case SDI12_BINTYPE_INT64:   return 8;
+    case SDI12_BINTYPE_UINT64:  return 8;
+    case SDI12_BINTYPE_FLOAT32: return 4;
+    case SDI12_BINTYPE_FLOAT64: return 8;
+    default:                    return 0;
+    }
 }
