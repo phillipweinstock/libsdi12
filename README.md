@@ -406,6 +406,12 @@ sdi12_crc_encode_ascii(crc, encoded);
 char buf[64] = "0+1.23+4.56\r\n";
 sdi12_crc_append(buf, sizeof(buf));
 
+/* Length-aware variant for binary data (won't truncate at null bytes) */
+char bin[64];
+bin[0] = '0';  /* address */
+memcpy(bin + 1, binary_payload, payload_len);
+sdi12_crc_append_n(bin, 1 + payload_len, sizeof(bin));
+
 /* Verify a received CRC-bearing response */
 bool ok = sdi12_crc_verify("0+1.23+4.56XYZ\r\n", 17);
 ```

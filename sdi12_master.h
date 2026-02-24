@@ -352,6 +352,29 @@ sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
                                    char *resp_buf, size_t *resp_len,
                                    uint32_t timeout_ms);
 
+/**
+ * Send an extended command and collect a multi-line response.
+ * Keeps receiving additional lines as long as data arrives within
+ * SDI12_MULTILINE_GAP_MS (150 ms) of the previous line.
+ *
+ * @param ctx          Master context.
+ * @param addr         Sensor address.
+ * @param xcmd         Extended command body (after 'X', before '!').
+ * @param resp_buf     [out] Buffer for concatenated multi-line response.
+ * @param resp_bufsize Size of resp_buf.
+ * @param resp_len     [out] Total bytes received.
+ * @param line_count   [out] Number of lines collected (NULL to ignore).
+ * @param timeout_ms   Response timeout for the *first* line.
+ * @return SDI12_OK on success.
+ */
+sdi12_err_t sdi12_master_extended_multiline(sdi12_master_ctx_t *ctx,
+                                             char addr,
+                                             const char *xcmd,
+                                             char *resp_buf, size_t resp_bufsize,
+                                             size_t *resp_len,
+                                             uint8_t *line_count,
+                                             uint32_t timeout_ms);
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Response Parsing Utilities                                               */
 /* ────────────────────────────────────────────────────────────────────────── */

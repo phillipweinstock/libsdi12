@@ -138,11 +138,13 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
     return SDI12_OK;
 }
 
-/** Send the response buffer via callback. */
+/** Send the response buffer via callback.
+ *  Uses ctx->resp_len when set (binary data), else strlen (text). */
 static void send_response(sdi12_sensor_ctx_t *ctx)
 {
     if (ctx->cb.send_response) {
-        ctx->cb.send_response(ctx->resp_buf, strlen(ctx->resp_buf), ctx->cb.user_data);
+        size_t len = ctx->resp_len ? ctx->resp_len : strlen(ctx->resp_buf);
+        ctx->cb.send_response(ctx->resp_buf, len, ctx->cb.user_data);
     }
 }
 
@@ -283,11 +285,19 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
             page, ctx->data_cache, ctx->data_cache_count,
             ctx->resp_buf, sizeof(ctx->resp_buf),
             ctx->cb.user_data);
-        size_t pos = 1 + payload;
-        if (pos + 2 < sizeof(ctx->resp_buf)) {
-            ctx->resp_buf[pos]     = '\r';
-            ctx->resp_buf[pos + 1] = '\n';
-            ctx->resp_buf[pos + 2] = '\0';
+        size_t pos = 1 + payload;  /* address + binary payload */
+
+        if (ctx->crc_requested) {
+            /* Append CRC using explicit length (binary may contain NUL) */
+            sdi12_crc_append_n(ctx->resp_buf, pos, sizeof(ctx->resp_buf));
+            ctx->resp_len = pos + 3 + 2;  /* data + 3 CRC chars + CR + LF */
+        } else {
+            if (pos + 2 < sizeof(ctx->resp_buf)) {
+                ctx->resp_buf[pos]     = '\r';
+                ctx->resp_buf[pos + 1] = '\n';
+                ctx->resp_buf[pos + 2] = '\0';
+            }
+            ctx->resp_len = pos + 2;  /* data + CR + LF */
         }
         send_response(ctx);
         return SDI12_OK;
@@ -649,6 +659,8 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
 {
     if (!ctx || !cmd || len == 0) return SDI12_ERR_INVALID_COMMAND;
 
+    ctx->resp_len = 0;  /* default: send_response uses strlen (safe for text) */
+
     /* Strip trailing '!' if present */
     size_t cmdlen = len;
     if (cmd[cmdlen - 1] == '!') {
@@ -763,15 +775,17 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
     }
 
     case 'H': {
-        /* aH!, aHA!, aHB! */
+        /* aH!, aHA!, aHAC!, aHB!, aHBC! */
         if (cmdlen == 2) {
             return handle_highvol_stub(ctx);
         }
         if (cmdlen >= 3) {
             if (cmd[2] == 'A') {
-                return handle_measurement(ctx, 0, true, SDI12_MEAS_HIGHVOL_ASCII);
+                bool crc = (cmdlen > 3 && cmd[3] == 'C');
+                return handle_measurement(ctx, 0, crc, SDI12_MEAS_HIGHVOL_ASCII);
             } else if (cmd[2] == 'B') {
-                return handle_measurement(ctx, 0, true, SDI12_MEAS_HIGHVOL_BINARY);
+                bool crc = (cmdlen > 3 && cmd[3] == 'C');
+                return handle_measurement(ctx, 0, crc, SDI12_MEAS_HIGHVOL_BINARY);
             }
         }
         return handle_highvol_stub(ctx);
@@ -802,6 +816,7 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
     ctx->data_available = true;
 
     /* Send service request for standard/verification measurements only */
+    ctx->resp_len = 0;  /* text response — strlen is safe */
     if (ctx->state == SDI12_STATE_MEASURING) {
         /* Standard M/V — service request required */
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);

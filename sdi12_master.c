@@ -482,6 +482,62 @@ sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
     return SDI12_OK;
 }
 
+sdi12_err_t sdi12_master_extended_multiline(sdi12_master_ctx_t *ctx,
+                                             char addr,
+                                             const char *xcmd,
+                                             char *resp_buf, size_t resp_bufsize,
+                                             size_t *resp_len,
+                                             uint8_t *line_count,
+                                             uint32_t timeout_ms)
+{
+    if (!ctx || !xcmd || !resp_buf || !resp_len) return SDI12_ERR_INVALID_COMMAND;
+    if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    char cmd[SDI12_CMD_MAX_CHARS + 4];
+    snprintf(cmd, sizeof(cmd), "%cX%s!", addr, xcmd);
+
+    /* Send the command */
+    sdi12_err_t err = send_command(ctx, cmd);
+    if (err != SDI12_OK) return err;
+
+    /* Receive the first line */
+    err = recv_response(ctx, timeout_ms);
+    if (err != SDI12_OK) return err;
+
+    /* Copy first line into output buffer */
+    size_t total = 0;
+    uint8_t lines = 0;
+
+    if (ctx->resp_len > 0) {
+        size_t copy = ctx->resp_len;
+        if (copy > resp_bufsize) copy = resp_bufsize;
+        memcpy(resp_buf, ctx->resp_buf, copy);
+        total = copy;
+        lines = 1;
+    }
+
+    /* Keep collecting lines as long as data arrives within the multi-line gap */
+    while (total < resp_bufsize) {
+        ctx->resp_len = ctx->cb.recv(ctx->resp_buf, sizeof(ctx->resp_buf) - 1,
+                                      SDI12_MULTILINE_GAP_MS, ctx->cb.user_data);
+        if (ctx->resp_len == 0)
+            break; /* no more lines — 150ms gap elapsed */
+
+        ctx->resp_buf[ctx->resp_len] = '\0';
+
+        size_t copy = ctx->resp_len;
+        if (total + copy > resp_bufsize) copy = resp_bufsize - total;
+        memcpy(resp_buf + total, ctx->resp_buf, copy);
+        total += copy;
+        lines++;
+    }
+
+    *resp_len = total;
+    if (line_count) *line_count = lines;
+
+    return SDI12_OK;
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Response Parsing                                                         */
 /* ────────────────────────────────────────────────────────────────────────── */

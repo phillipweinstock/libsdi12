@@ -225,6 +225,7 @@ typedef struct {
 
     /* Response buffer */
     char               resp_buf[SDI12_MAX_RESPONSE_LEN];
+    size_t             resp_len;  /**< Actual response length (avoids strlen on binary). */
 } sdi12_sensor_ctx_t;
 
 /* ────────────────────────────────────────────────────────────────────────── */

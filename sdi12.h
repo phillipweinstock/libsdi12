@@ -323,6 +323,20 @@ void sdi12_crc_encode_ascii(uint16_t crc, char out[4]);
 sdi12_err_t sdi12_crc_append(char *buf, size_t buflen);
 
 /**
+ * @brief Compute and append CRC to a response buffer with explicit data length.
+ *
+ * Like sdi12_crc_append() but uses an explicit data length instead of strlen(),
+ * making it safe for binary payloads that may contain null bytes.
+ * The CRC is computed over buf[0..data_len-1] and inserted before CR/LF.
+ *
+ * @param buf       Response buffer.
+ * @param data_len  Number of data bytes (payload before CR/LF, or total if no CR/LF).
+ * @param buflen    Total buffer capacity.
+ * @return SDI12_OK on success, SDI12_ERR_BUFFER_OVERFLOW if insufficient room.
+ */
+sdi12_err_t sdi12_crc_append_n(char *buf, size_t data_len, size_t buflen);
+
+/**
  * @brief Verify CRC on a received response string.
  *
  * Expects the 3 CRC chars immediately before the CR/LF terminator.
