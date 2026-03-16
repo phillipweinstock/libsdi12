@@ -1,6 +1,6 @@
 libsdi12 (0.3.0-1) unstable; urgency=medium
 
-  * Initial Debian packaging.
+  * Initial Debian packaging (Closes: #1130920).
   * Upstream release 0.3.0:
     - Full SDI-12 v1.4 spec coverage (sensor + master).
     - Binary packet framing for aDBn! commands.
