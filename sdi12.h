@@ -9,7 +9,7 @@
  * No hardware dependencies — all I/O is delegated to user-supplied callbacks.
  *
  * @author Phillip Weinstock
- * @copyright 2026 All Rights Reserved
+ * @copyright 2026 Phillip Weinstock
  */
 #ifndef SDI12_H
 #define SDI12_H
@@ -27,7 +27,7 @@ extern "C" {
 /* ────────────────────────────────────────────────────────────────────────── */
 
 #define SDI12_LIB_VERSION_MAJOR 0
-#define SDI12_LIB_VERSION_MINOR 1
+#define SDI12_LIB_VERSION_MINOR 3
 #define SDI12_LIB_VERSION_PATCH 0
 
 /** SDI-12 protocol version this library targets. */

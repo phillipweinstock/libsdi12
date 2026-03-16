@@ -1,0 +1,4 @@
+usr/include/sdi12/*.h
+usr/lib/*/libsdi12.a
+usr/lib/*/libsdi12.so
+usr/lib/*/pkgconfig/sdi12.pc

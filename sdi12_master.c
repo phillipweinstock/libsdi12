@@ -793,15 +793,15 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
 size_t sdi12_bintype_size(sdi12_bintype_t type)
 {
     switch (type) {
-    case SDI12_BINTYPE_INT8:    return 1;
+    case SDI12_BINTYPE_INT8:
     case SDI12_BINTYPE_UINT8:   return 1;
-    case SDI12_BINTYPE_INT16:   return 2;
+    case SDI12_BINTYPE_INT16:
     case SDI12_BINTYPE_UINT16:  return 2;
-    case SDI12_BINTYPE_INT32:   return 4;
-    case SDI12_BINTYPE_UINT32:  return 4;
-    case SDI12_BINTYPE_INT64:   return 8;
-    case SDI12_BINTYPE_UINT64:  return 8;
+    case SDI12_BINTYPE_INT32:
+    case SDI12_BINTYPE_UINT32:
     case SDI12_BINTYPE_FLOAT32: return 4;
+    case SDI12_BINTYPE_INT64:
+    case SDI12_BINTYPE_UINT64:
     case SDI12_BINTYPE_FLOAT64: return 8;
     default:                    return 0;
     }

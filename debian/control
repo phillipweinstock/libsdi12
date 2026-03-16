@@ -1,0 +1,47 @@
+Source: libsdi12
+Section: libs
+Priority: optional
+Maintainer: Phillip Weinstock <phillipweinstock@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake (>= 3.14),
+ pkgconf,
+Standards-Version: 4.7.2.0
+Homepage: https://github.com/phillipweinstock/libsdi12
+Vcs-Git: https://github.com/phillipweinstock/libsdi12.git
+Vcs-Browser: https://github.com/phillipweinstock/libsdi12
+Rules-Requires-Root: no
+
+Package: libsdi12-0
+Architecture: any
+Multi-Arch: same
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: portable SDI-12 v1.4 protocol library — shared library
+ A pure C implementation of the SDI-12 v1.4 serial digital interface
+ protocol covering every command in the specification — sensor (slave)
+ and master (data recorder) roles — with zero external dependencies.
+ .
+ Features include full v1.4 command coverage, CRC-16-IBM, high-volume
+ ASCII/binary, metadata identification, concurrent and continuous
+ measurements, and extended commands.
+ .
+ This package contains the shared library.
+
+Package: libsdi12-dev
+Architecture: any
+Multi-Arch: same
+Section: libdevel
+Depends: libsdi12-0 (>= ${source:Version}), libsdi12-0 (<< ${source:Version}.1~), ${misc:Depends}
+Suggests: pkgconf
+Description: portable SDI-12 v1.4 protocol library — development files
+ A pure C implementation of the SDI-12 v1.4 serial digital interface
+ protocol covering every command in the specification — sensor (slave)
+ and master (data recorder) roles — with zero external dependencies.
+ .
+ Features include full v1.4 command coverage, CRC-16-IBM, high-volume
+ ASCII/binary, metadata identification, concurrent and continuous
+ measurements, and extended commands.
+ .
+ This package contains the development headers, static library, and
+ pkg-config file.

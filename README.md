@@ -497,6 +497,34 @@ make && ctest
 
 ---
 
+## Why This Library Exists
+
+In May 2023, as a university student trying to implement an
+SDI-12 sensor, I emailed the SDI-12 Support Group asking if an open-source
+reference implementation existed. I never got a reply.
+
+Since 1988 the SDI-12 protocol has been an open standard. In that time,
+dozens of companies — Campbell Scientific, Meter Group, In-Situ, Xylem/YSI,
+Hach, Stevens Water, and others — have profited from SDI-12 products for
+decades. Not one ever released a reusable, complete and open-source
+implementation of the protocol they all depend on.
+
+Every embedded engineer needing to use an SDI-12 sensor or create a datalogger
+has had to reverse-engineer the spec from scratch, copy snippets from forums,
+or purchase a proprietary SDK. For a 1200-baud serial protocol released in 1988.
+
+So I built something that should have existed decades ago: a complete, portable,
+testable, MIT-licensed SDI-12 library — sensor and master — in pure C with
+zero dependencies.
+
+If your organisation profits from SDI-12, consider contributing back —
+whether that's a PR, sponsorship, or simply sharing this library with your
+users. An open protocol ***deserves*** open source.
+
+— *Phillip Weinstock, 2026*
+
+---
+
 ## Commercial Support & Services
 
 Building an SDI-12 product and need help? I offer

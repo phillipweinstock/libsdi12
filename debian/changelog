@@ -1,0 +1,10 @@
+libsdi12 (0.3.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging (Closes: #1130920).
+  * Upstream release 0.3.0:
+    - Full SDI-12 v1.4 spec coverage (sensor + master).
+    - Binary packet framing for aDBn! commands.
+    - CRC-16-IBM with sdi12_crc_append_n for binary payloads.
+    - 98 unit + metamorphic tests.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Sat, 28 Feb 2026 12:00:00 +0000

@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DSDI12_BUILD_SHARED=ON \
+		-DSDI12_BUILD_STATIC=ON \
+		-DSDI12_BUILD_TESTS=ON
+
+override_dh_auto_test:
+	dh_auto_test --no-parallel

@@ -1,0 +1,5 @@
+# Default: auto-detect
+* text=auto
+
+# Debian packaging MUST use Unix line endings
+debian/** text eol=lf
