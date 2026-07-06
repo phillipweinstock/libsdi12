@@ -310,8 +310,12 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
     uint16_t payload_size = (uint16_t)(cb_bytes - 1);
 
     /* The full packet (addr + size + type + payload + CRC) must fit the
-     * response buffer — clamp the payload so the CRC never lands past it. */
+     * response buffer — clamp the payload so the CRC never lands past it.
+     * Also enforce the spec's 1000-byte per-packet payload cap (§5.2
+     * Table 14), which matters when SDI12_MAX_RESPONSE_LEN is enlarged. */
     size_t max_payload = sizeof(ctx->resp_buf) - SDI12_BIN_PKT_OVERHEAD;
+    if (max_payload > SDI12_BIN_MAX_PAYLOAD)
+        max_payload = SDI12_BIN_MAX_PAYLOAD;
     if (payload_size > max_payload)
         payload_size = (uint16_t)max_payload;
 

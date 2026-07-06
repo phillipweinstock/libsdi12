@@ -70,8 +70,29 @@ extern "C" {
 /** Max chars per value (sign + 7 digits + decimal point). */
 #define SDI12_VALUE_MAX_CHARS 9
 
-/** Max total response length (generous — longest is extended multi-line). */
+/**
+ * Max total response length (generous — longest standard response is the
+ * 75-char <values> field + address + CRC + CRLF = 82).
+ *
+ * Override at compile time (-DSDI12_MAX_RESPONSE_LEN=NNN) to enlarge the
+ * context response buffers, e.g. for larger aDBn! binary packets: payload
+ * per packet = SDI12_MAX_RESPONSE_LEN - SDI12_BIN_PKT_OVERHEAD, and the
+ * spec caps the payload at 1000 bytes (v1.4 §5.2 Table 14), so 1006
+ * covers the maximum. Smaller packets remain fully spec-compliant — the
+ * recorder simply issues more aDBn! commands until it receives an empty
+ * packet (§5.2.2 Table 18).
+ *
+ * NOTE: this changes sizeof(sdi12_sensor_ctx_t) / sizeof(sdi12_master_ctx_t).
+ * The library and the application must be compiled with the same value —
+ * do not override it when linking against a prebuilt shared library.
+ */
+#ifndef SDI12_MAX_RESPONSE_LEN
 #define SDI12_MAX_RESPONSE_LEN 82
+#endif
+
+#if SDI12_MAX_RESPONSE_LEN < 82
+#error "SDI12_MAX_RESPONSE_LEN must be >= 82 (75-char values + address + CRC + CRLF)"
+#endif
 
 /** Max command length a master would send or sensor would receive. */
 #define SDI12_MAX_COMMAND_LEN 20
