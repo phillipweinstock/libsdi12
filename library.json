@@ -1,7 +1,7 @@
 {
     "name": "libsdi12",
     "version": "0.3.0",
-    "description": "The most complete, portable SDI-12 v1.4 protocol library. Pure C, sensor + master, 98 tests, zero dependencies.",
+    "description": "The most complete, portable SDI-12 v1.4 protocol library. Pure C, sensor + master, 114 tests, zero dependencies.",
     "keywords": [
         "sdi-12", "sdi12", "sensor", "serial", "environmental",
         "protocol", "data-logger", "master", "slave", "crc",

@@ -6,19 +6,18 @@ A pure C implementation of the **SDI-12 v1.4** protocol covering **every
 command in the specification** — both **sensor (slave)** and **master (data
 recorder)** roles — with zero external dependencies.
 
-No other open-source SDI-12 library offers this combination:
-
 - ✅ **Full v1.4 spec coverage** — every command type, including high-volume,
   concurrent, continuous, verification, metadata, extended, and CRC variants
 - ✅ **Dual-role** — sensor *and* master in one library
 - ✅ **Beginner-friendly** — `sdi12_easy.h` convenience macros: sensor in 4
-  lines, master in 3 — great for hobbyists and Arduino users
-- ✅ **Pure C11** — no Arduino, no HAL, no OS, no `malloc`
-- ✅ **98 tests** — unit + metamorphic/property-based, all platform-agnostic
-- ✅ **Registry-ready** — works out of the box with PlatformIO Library Manager
-  and Arduino Library Manager
-- ✅ **Zero dependencies** — compiles anywhere: `gcc`, `clang`, `armcc`,
-  `arm-none-eabi-gcc`, MSVC, PlatformIO, CMake, or bare Makefile
+  lines, master in 3
+- ✅ **Pure C11, no `malloc`** — all state lives in user-allocated context
+  structs; UART, GPIO, and timing are abstracted behind callbacks
+- ✅ **114 tests** — unit + metamorphic/property-based, all runnable on
+  desktop with no hardware and no external test framework
+- ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
+  MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
+- ✅ **C++ compatible** — all headers wrapped in `extern "C"`
 
 > Most SDI-12 libraries only implement the master side, cover a handful of
 > commands, and are tightly coupled to Arduino or a specific HAL. **libsdi12**
@@ -40,15 +39,20 @@ No other open-source SDI-12 library offers this combination:
 | `aR0!`–`aR9!` | Continuous measurement | ✅ | ✅ |
 | `aRC0!`–`aRC9!` | Continuous measurement + CRC | ✅ | ✅ |
 | `aD0!`–`aD9!` | Send data | ✅ | ✅ |
+| `aDB0!`–`aDB999!` | Binary data packets (§5.2) | ✅ | ✅ |
 | `aV!` | Verification | ✅ | ✅ |
 | `aAb!` | Change address | ✅ | ✅ |
 | `aX…!` | Extended commands | ✅ | ✅ |
-| `aHA!` | High-volume ASCII | ✅ | ✅ |
-| `aHB!` | High-volume binary | Callback | ✅ |
-| `aIM!` `aIC!` `aIM_nnn!` | Metadata / param identification | ✅ | — |
+| `aHA!` / `aHAC!` | High-volume ASCII | ✅ | ✅ |
+| `aHB!` / `aHBC!` | High-volume binary | ✅¹ | ✅ |
+| `aIM!` `aIC!` `aIM_nnn!` … | Metadata / parameter identification | ✅ | ✅ |
 | CRC-16-IBM | Compute, append, verify | ✅ | ✅ |
 | Break signal | Detect / send | ✅ | ✅ |
 | Service request (`a\r\n`) | Async measurement complete | ✅ | ✅ |
+
+¹ Binary payload encoding is manufacturer-defined, so the sensor side
+delegates it to a `format_binary_page` callback; framing and CRC are handled
+by the library.
 
 ### Comparison With Other Libraries
 
@@ -58,22 +62,13 @@ No other open-source SDI-12 library offers this combination:
 | Sensor (slave) role | ✅ | ❌ | Rare |
 | Master (recorder) role | ✅ | ✅ | ✅ |
 | CRC-16 (MC/CC/RC) | ✅ | ❌ | Rare |
-| High-volume (HA/HB) | ✅ | ❌ | ❌ |
+| High-volume (HA/HB, aDBn!) | ✅ | ❌ | ❌ |
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 98 tests | ❌ | Minimal |
+| Test suite | 114 tests | ❌ | Minimal |
 
 ---
-
-## Zero Dependencies
-
-- **No `malloc`** — all state lives in user-allocated context structs.
-- **No hardware headers** — UART, GPIO, and timing abstracted via callbacks.
-- **C11** — compiles with `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`, MSVC.
-- **C++ compatible** — all headers wrapped in `extern "C"`.
-- **Self-contained tests** — includes its own single-header test framework;
-  no Unity, no Google Test, no framework install needed.
 
 ## File Structure
 
@@ -89,31 +84,16 @@ libsdi12/
 ├── sdi12_master.c       # Master command builder & response parser
 ├── library.json         # PlatformIO library manifest
 ├── library.properties   # Arduino Library Manager manifest
-├── LICENSE              # MIT license
 ├── CMakeLists.txt       # CMake build support
-├── examples/
-│   ├── EasySensor/EasySensor.ino  # ★ Arduino sensor sketch (easy macros)
-│   ├── EasyMaster/EasyMaster.ino  # ★ Arduino master sketch (easy macros)
-│   ├── BareSensor/BareSensor.ino  # ★ Arduino sensor sketch (raw API)
-│   ├── BareMaster/BareMaster.ino  # ★ Arduino master sketch (raw API)
-│   ├── InterruptSensor/InterruptSensor.ino  # ★ ISR-driven Arduino sensor
-│   ├── InterruptMaster/InterruptMaster.ino  # ★ ISR-driven Arduino master
-│   ├── interrupt_sensor.c   # ★ Bare-metal ISR sensor (Cortex-M)
-│   ├── interrupt_master.c   # ★ Bare-metal ISR master (Cortex-M)
-│   ├── easy_sensor.c    # ★ Minimal sensor (plain C, easy macros)
-│   ├── easy_master.c    # ★ Minimal master (plain C, easy macros)
-│   ├── example_sensor.c # Full-featured sensor walkthrough (raw API)
-│   ├── example_master.c # Full-featured master walkthrough (raw API)
-│   └── example_crc.c    # Standalone CRC demo (compiles & runs)
-├── test/
-│   ├── sdi12_test.h     # Standalone single-header test framework
-│   ├── Makefile         # Build tests with any C compiler
-│   ├── test_main.c      # Test runner (98 tests)
-│   ├── test_crc.c       # CRC-16 tests (15)
-│   ├── test_address.c   # Address validation tests (7)
-│   ├── test_sensor.c    # Sensor state machine tests (36)
-│   ├── test_master.c    # Master parser tests (21)
-│   └── test_metamorphic.c  # Property-based tests (19)
+├── examples/            # Arduino sketches + plain-C examples
+│   ├── EasySensor/ EasyMaster/          # ★ Easy-macro Arduino sketches
+│   ├── BareSensor/ BareMaster/          # Raw-API Arduino sketches
+│   ├── InterruptSensor/ InterruptMaster/  # ISR-driven Arduino sketches
+│   ├── easy_sensor.c / easy_master.c    # ★ Minimal plain-C examples
+│   ├── example_sensor.c / example_master.c  # Full raw-API walkthroughs
+│   ├── interrupt_sensor.c / interrupt_master.c  # Bare-metal (Cortex-M)
+│   └── example_crc.c                    # Standalone CRC demo
+├── test/                # Self-contained test suite (see TESTING.md)
 ├── TESTING.md           # Test documentation & architecture
 └── README.md
 ```
@@ -123,7 +103,7 @@ libsdi12/
 ### PlatformIO
 
 Drop the `libsdi12/` folder into your project's `lib/` directory. PlatformIO
-will auto-discover it via `library.json`. Then include:
+auto-discovers it via `library.json`. Then include:
 
 ```c
 #include <sdi12.h>
@@ -145,7 +125,7 @@ Add all `.c` and `.h` files to your build system. Requires C11 (`-std=c11`).
 
 ## ★ Easy API — For Beginners & Hobbyists
 
-Don't want to deal with structs, callbacks tables, and init boilerplate?
+Don't want to deal with structs, callback tables, and init boilerplate?
 Include `sdi12_easy.h` and get going in **4 lines**:
 
 ### Easy Sensor (complete example)
@@ -207,7 +187,7 @@ void read_sensor(char addr) {
 > [`EasySensor`](examples/EasySensor/EasySensor.ino),
 > [`EasyMaster`](examples/EasyMaster/EasyMaster.ino) (Arduino)
 >
-> **Raw API (bare headers)**: [`example_sensor.c`](examples/example_sensor.c),
+> **Raw API**: [`example_sensor.c`](examples/example_sensor.c),
 > [`example_master.c`](examples/example_master.c) |
 > [`BareSensor`](examples/BareSensor/BareSensor.ino),
 > [`BareMaster`](examples/BareMaster/BareMaster.ino) (Arduino)
@@ -216,10 +196,6 @@ void read_sensor(char addr) {
 > [`InterruptMaster`](examples/InterruptMaster/InterruptMaster.ino) (Arduino) |
 > [`interrupt_sensor.c`](examples/interrupt_sensor.c),
 > [`interrupt_master.c`](examples/interrupt_master.c) (bare-metal)
->
-> **Advanced API**: See the full Sensor and Master API sections below for
-> complete control (EEPROM persistence, extended commands, binary high-volume,
-> metadata, etc.)
 
 ---
 
@@ -284,8 +260,11 @@ sdi12_sensor_register_param(&ctx, 0, "RH", "%RH", 1);  /* Humidity   */
 /* In your main loop, when a complete SDI-12 command arrives: */
 sdi12_sensor_process(&ctx, buffer, length);
 
-/* After measurement hardware finishes (for M/C commands): */
-sdi12_sensor_measurement_done(&ctx);
+/* When your async measurement hardware finishes (for M/C commands),
+ * hand the values to the library — it sends the service request for
+ * M/V and makes the data available for D commands: */
+sdi12_value_t vals[] = { {23.10f, 2}, {55.4f, 1} };
+sdi12_sensor_measurement_done(&ctx, vals, 2);
 
 /* On break signal detection: */
 sdi12_sensor_break(&ctx);
@@ -295,12 +274,15 @@ sdi12_sensor_break(&ctx);
 
 | Callback | Purpose |
 |---|---|
-| `save_address` | Persist address to flash/EEPROM on `aAb!` change |
-| `load_address` | Restore address on init (overrides default) |
-| `xcmd_handler` | Handle extended commands (`aX...!`) |
-| `format_binary_page` | Custom binary encoding for `aHB!` data pages |
+| `save_address` / `load_address` | Persist address to flash/EEPROM across power cycles |
+| `start_measurement` | Begin an async measurement; return `ttt` seconds (NULL = synchronous) |
+| `service_request` | Custom service-request transmit (NULL = uses `send_response`) |
+| `format_binary_page` | Manufacturer-defined binary encoding for `aHB!` / `aDBn!` pages |
+| `on_reset` | Device reset hook |
 
 ### Extended Commands
+
+Registered separately with `sdi12_sensor_register_xcmd()`:
 
 ```c
 sdi12_err_t my_reset(const char *xcmd, char *resp, size_t len, void *ud) {
@@ -353,23 +335,31 @@ sdi12_master_init(&ctx, &cb);
 /* Wake the bus */
 sdi12_master_send_break(&ctx);
 
-/* Start measurement on sensor '0' */
+/* Start a CRC-protected measurement on sensor '0' */
 sdi12_meas_response_t mresp;
-sdi12_master_start_measurement(&ctx, '0', SDI12_MEAS_STANDARD, 0, false, &mresp);
+sdi12_master_start_measurement(&ctx, '0', SDI12_MEAS_STANDARD, 0, true, &mresp);
 
 /* Wait for service request if needed */
 if (mresp.wait_seconds > 0) {
     sdi12_master_wait_service_request(&ctx, '0', mresp.wait_seconds * 1000);
 }
 
-/* Retrieve data */
+/* Retrieve data — CRC is verified before parsing */
 sdi12_data_response_t dresp;
-sdi12_master_get_data(&ctx, '0', 0, false, &dresp);
+sdi12_err_t err = sdi12_master_get_data(&ctx, '0', 0, true, &dresp);
+if (err == SDI12_ERR_CRC_MISMATCH) {
+    /* corrupt data on the bus — retry */
+}
 
 for (int i = 0; i < dresp.value_count; i++) {
     printf("Value %d: %.2f\n", i, dresp.values[i].value);
 }
 ```
+
+With `crc=true`, `sdi12_master_get_data()` and `sdi12_master_continuous()`
+verify the CRC over the raw response and set `resp.crc_valid`; corrupt data
+returns `SDI12_ERR_CRC_MISMATCH`. Responses whose address doesn't match the
+queried sensor are rejected with `SDI12_ERR_INVALID_ADDRESS`.
 
 ### Pure Parsing (No I/O)
 
@@ -388,9 +378,45 @@ sdi12_master_parse_data_values("+1.23-4.56+7.89", 15, vals, 10, &count, false);
 
 ---
 
+## Configuration
+
+The response buffers inside the context structs default to 82 bytes — enough
+for every standard ASCII response. For larger `aDBn!` binary packets, enlarge
+them at compile time:
+
+```
+-DSDI12_MAX_RESPONSE_LEN=1006    # fits the spec's 1000-byte payload cap
+```
+
+Payload per binary packet = `SDI12_MAX_RESPONSE_LEN − 6` (address + size +
+type + CRC overhead). The default is fully spec-compliant — small packets
+just mean the recorder issues more `aDBn!` commands until it receives an
+empty packet (§5.2.2).
+
+> **Note:** overriding this changes `sizeof(sdi12_sensor_ctx_t)` and
+> `sizeof(sdi12_master_ctx_t)`. Compile the library and your application with
+> the same value — don't override it when linking against a prebuilt shared
+> library.
+
+---
+
+## Spec Conformance Notes
+
+Two v1.4 behaviors that regularly surprise integrators — libsdi12 implements
+both per the spec:
+
+- **Breaks do not abort concurrent measurements** (§4.4.7). The recorder is
+  *expected* to wake the sensor with a break before issuing `aD0!`. Breaks
+  do abort standard `aM!` measurements (§4.4.5.1).
+- **Any command addressed to the sensor aborts its concurrent measurement —
+  including `aD0!`** (§4.4.7.1). That is the spec's abort mechanism. Don't
+  poll a concurrent measurement with D commands; wait the full `ttt`.
+
+---
+
 ## CRC-16-IBM
 
-The library includes a full CRC implementation per the SDI-12 v1.4 specification:
+Full CRC implementation per SDI-12 v1.4 §4.4.12:
 
 ```c
 #include <sdi12.h>
@@ -407,18 +433,14 @@ char buf[64] = "0+1.23+4.56\r\n";
 sdi12_crc_append(buf, sizeof(buf));
 
 /* Length-aware variant for binary data (won't truncate at null bytes) */
-char bin[64];
-bin[0] = '0';  /* address */
-memcpy(bin + 1, binary_payload, payload_len);
 sdi12_crc_append_n(bin, 1 + payload_len, sizeof(bin));
 
 /* Verify a received CRC-bearing response */
 bool ok = sdi12_crc_verify("0+1.23+4.56XYZ\r\n", 17);
 ```
 
-**Algorithm**: CRC-16-IBM, polynomial 0xA001 (reflected), initial value 0x0000.
-Each 16-bit CRC is encoded as 3 printable ASCII characters (6 bits each, OR'd
-with 0x40).
+**Algorithm**: CRC-16-IBM, polynomial 0xA001 (reflected), initial value
+0x0000. Encoded as 3 printable ASCII characters (6 bits each, OR'd with 0x40).
 
 ---
 
@@ -429,12 +451,17 @@ All API functions return `sdi12_err_t`:
 | Code | Meaning |
 |---|---|
 | `SDI12_OK` | Success |
-| `SDI12_ERR_INVALID_ADDRESS` | Address not in `[0-9A-Za-z]` |
+| `SDI12_ERR_INVALID_ADDRESS` | Address not in `[0-9A-Za-z]`, or response from wrong sensor |
 | `SDI12_ERR_INVALID_COMMAND` | Malformed or unrecognised command |
 | `SDI12_ERR_BUFFER_OVERFLOW` | Response exceeds buffer capacity |
 | `SDI12_ERR_NOT_ADDRESSED` | Command addressed to a different sensor |
+| `SDI12_ERR_NO_DATA` | No measurement data available |
+| `SDI12_ERR_PARAM_LIMIT` | Parameter / extended-command table full |
+| `SDI12_ERR_CALLBACK_MISSING` | Required callback not provided |
 | `SDI12_ERR_TIMEOUT` | No response within timeout period |
-| `SDI12_ERR_CRC` | CRC verification failed |
+| `SDI12_ERR_CRC_MISMATCH` | CRC verification failed |
+| `SDI12_ERR_PARSE_FAILED` | Response could not be parsed |
+| `SDI12_ERR_ABORTED` | Operation aborted |
 
 ---
 
@@ -456,70 +483,51 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-98 unit tests run on desktop without any hardware or external dependencies.
-
-### Standalone (any C compiler)
+**114 tests** run on desktop with no hardware and no external framework —
+the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 98 Tests 0 Failures
+./test_sdi12    # 114 Tests 0 Failures
 ```
-
-The test suite uses a **self-contained single-header test framework**
-(`sdi12_test.h`) — no Unity, no Google Test, no package manager. Just a C
-compiler and `make`.
-
-### PlatformIO
-
-```bash
-pio test -e native    # if using PlatformIO with Unity
-```
-
-### CMake
-
-```bash
-mkdir build && cd build
-cmake .. -DSDI12_BUILD_TESTS=ON
-make && ctest
-```
-
-### Test Categories
 
 | Suite | Tests | What It Covers |
 |---|---:|---|
 | CRC-16 | 15 | Encode, decode, append, verify, roundtrip, edge cases |
 | Address | 7 | Valid/invalid ranges, boundary chars, total count |
-| Sensor | 36 | All command types, state machine, callbacks, metadata |
-| Master | 21 | Measurement parsing, data extraction, CRC strip |
-| Metamorphic | 19 | Property-based: mutation detection, determinism, bijection, sign-flip, partition completeness |
-| **Total** | **98** | |
+| Sensor | 48 | All command types, state machine, D-page pagination, binary packet bounds, concurrent-abort semantics |
+| Master | 25 | Response parsing, CRC verification, address checks, scripted transactions |
+| Metamorphic | 19 | Property-based: mutation detection, determinism, bijection |
+
+See [TESTING.md](TESTING.md) for architecture, CMake/PlatformIO runners, and
+how to add tests.
 
 ---
 
 ## Why This Library Exists
 
-In May 2023, as a university student trying to implement an
-SDI-12 sensor, I emailed the SDI-12 Support Group asking if an open-source
-reference implementation existed. I never got a reply.
+In May 2023, as a university student trying to implement an SDI-12 sensor, I
+emailed the SDI-12 Support Group asking if an open-source reference
+implementation existed. I never got a reply.
 
-Since 1988 the SDI-12 protocol has been an open standard. In that time,
-dozens of companies — Campbell Scientific, Meter Group, In-Situ, Xylem/YSI,
-Hach, Stevens Water, and others — have profited from SDI-12 products for
-decades. Not one ever released a reusable, complete and open-source
-implementation of the protocol they all depend on.
+SDI-12 has been an open standard since 1988. In that time dozens of
+companies — Campbell Scientific, Meter Group, In-Situ, Xylem/YSI, Hach,
+Stevens Water, and others — have built profitable product lines on it. Not
+one released a complete, reusable, open-source implementation of the
+protocol they all depend on.
 
-Every embedded engineer needing to use an SDI-12 sensor or create a datalogger
-has had to reverse-engineer the spec from scratch, copy snippets from forums,
-or purchase a proprietary SDK. For a 1200-baud serial protocol released in 1988.
+So every embedded engineer who needs to talk to an SDI-12 sensor or build a
+datalogger has had to reverse-engineer the spec, scrape snippets from
+forums, or buy a proprietary SDK — for a 1200-baud serial protocol from 1988.
 
-So I built something that should have existed decades ago: a complete, portable,
-testable, MIT-licensed SDI-12 library — sensor and master — in pure C with
-zero dependencies.
+This library is what should have existed decades ago: a complete, portable,
+tested, MIT-licensed SDI-12 implementation — sensor and master — in pure C
+with zero dependencies.
 
-If your organisation profits from SDI-12, consider contributing back —
-whether that's a PR, sponsorship, or simply sharing this library with your
-users. An open protocol ***deserves*** open source.
+If your organisation profits from SDI-12, consider contributing back — a PR,
+sponsorship, or simply sharing this library with your users. An open
+protocol ***deserves*** open source.
 
 — *Phillip Weinstock, 2026*
 
@@ -527,8 +535,8 @@ users. An open protocol ***deserves*** open source.
 
 ## Commercial Support & Services
 
-Building an SDI-12 product and need help? I offer
-professional services for teams and companies using libsdi12:
+Building an SDI-12 product and need help? Professional services for teams
+and companies using libsdi12:
 
 | Service | Description |
 |---|---|
@@ -542,8 +550,8 @@ professional services for teams and companies using libsdi12:
 📧 **Contact**: [phillipweinstock@gmail.com](mailto:phillipweinstock@gmail.com)
 
 > The library itself is and will always be **free and open source** (MIT).
-> Commercial support is available for teams that want expert guidance, faster
-> integration, or custom development.
+> Commercial support is available for teams that want expert guidance,
+> faster integration, or custom development.
 
 ---
 

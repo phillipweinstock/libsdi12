@@ -1,6 +1,6 @@
 # Testing libsdi12
 
-libsdi12 ships with **98 tests** across 5 categories, all runnable on desktop
+libsdi12 ships with **114 tests** across 5 categories, all runnable on desktop
 without any hardware, SDI-12 bus, or external test framework.
 
 ---
@@ -25,7 +25,7 @@ Output:
   PASS: test_meta_parse_meas_address_passthrough
 
 -----------------------
-98 Tests 0 Failures 0 Ignored
+114 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -136,7 +136,7 @@ Tests the `sdi12_valid_address()` function.
 | `test_invalid_boundaries` | Chars adjacent to valid ranges are invalid |
 | `test_total_valid_count` | Exactly 62 valid addresses in ASCII range |
 
-### 3. Sensor (Slave) Tests — `test_sensor.c` (36 tests)
+### 3. Sensor (Slave) Tests — `test_sensor.c` (48 tests)
 
 Tests the complete sensor command parser and state machine.
 
@@ -157,15 +157,22 @@ Tests the complete sensor command parser and state machine.
 | Parameter registration | 2 | Max params, group counts |
 | Async measurement | 2 | Service request, concurrent (no SR) |
 | Negative values | 1 | `-10.5` in data response |
+| D-page pagination | 4 | Multi-page `aD0!`/`aD1!` splitting, empty pages, CRC per page |
+| Binary packet bounds | 1 | `aDBn!` packet clamped to the response buffer, CRC intact |
+| Concurrent semantics | 3 | Survives break (§4.4.7), aborted by addressed command (§4.4.7.1), ignores other addresses |
+| Identify CRC variants | 2 | `aIMC!` / `aICC!` responses carry a verifiable CRC |
+| Overlong values | 1 | Values longer than 9 chars clamped, no garbage on the bus |
+| NULL guard | 1 | `measurement_done(NULL, n)` returns an error instead of crashing |
 
-### 4. Master (Data Recorder) Tests — `test_master.c` (21 tests)
+### 4. Master (Data Recorder) Tests — `test_master.c` (25 tests)
 
-Tests the pure parsing functions (no I/O required).
+Tests the pure parsing functions plus full transactions against scripted I/O.
 
 | Group | Tests | What It Parses |
 |---|---|---|
 | Measurement response | 10 | `atttn` (M), `atttnn` (C), `atttnnn` (H), edge cases |
 | Data values | 11 | `+/-nn.nnn` extraction, CRC strip, capacity, NULL safety |
+| Scripted transactions | 4 | `get_data` CRC verified/corrupt, wrong-address rejection (mock send/recv callbacks) |
 
 ### 5. Metamorphic / Property-Based Tests — `test_metamorphic.c` (19 tests)
 
@@ -183,7 +190,7 @@ These catch bugs that point-test oracles miss.
 | **Sensor: Address reversible** | Change A→B→A restores original |
 | **Sensor: Universal silence** | Wrong address → no response (all 61 others) |
 | **Sensor: Deterministic M+D** | Same params → same response twice |
-| **Sensor: Break from any state** | Always returns to READY |
+| **Sensor: Break from any state** | Returns to READY — except during a concurrent measurement, which survives breaks (§4.4.7) |
 | **Sensor: CRC adds 3 chars** | MC response is exactly 3 chars longer than M |
 | **Sensor: HA vs M format** | HA response is 2 chars longer (nnn vs n) |
 | **Sensor: HB with callback** | Binary callback is invoked |
@@ -225,7 +232,7 @@ void test_sensor_my_new_feature(void)
     reset_mocks();
     sdi12_sensor_ctx_t ctx = create_test_ctx('0');
 
-    sdi12_sensor_process(&ctx, "0M!", 3);
+    sdi12_err_t err = sdi12_sensor_process(&ctx, "0M!", 3);
     TEST_ASSERT_EQUAL(SDI12_OK, err);
     TEST_ASSERT_EQUAL_STRING("00005\r\n", mock_response);
 }
