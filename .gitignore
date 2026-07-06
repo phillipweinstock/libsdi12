@@ -32,3 +32,14 @@ Thumbs.db
 
 # Test binary
 test/test_sdi12
+
+# Debian packaging build artifacts
+obj-*/
+debian/tmp/
+debian/files
+debian/*.debhelper.log
+debian/*.substvars
+debian/debhelper-build-stamp
+debian/libsdi12-0/
+debian/libsdi12-dev/
+debian/.debhelper/
