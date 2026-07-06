@@ -3,9 +3,20 @@
     "version": "0.4.0",
     "description": "The most complete, portable SDI-12 v1.4 protocol library. Pure C, sensor + master, 114 tests, zero dependencies.",
     "keywords": [
-        "sdi-12", "sdi12", "sensor", "serial", "environmental",
-        "protocol", "data-logger", "master", "slave", "crc",
-        "1200-baud", "half-duplex", "measurement", "hydrology"
+        "sdi-12",
+        "sdi12",
+        "sensor",
+        "serial",
+        "environmental",
+        "protocol",
+        "data-logger",
+        "master",
+        "slave",
+        "crc",
+        "1200-baud",
+        "half-duplex",
+        "measurement",
+        "hydrology"
     ],
     "license": "MIT",
     "homepage": "https://github.com/phillipweinstock/libsdi12",
@@ -22,18 +33,32 @@
     ],
     "frameworks": "*",
     "platforms": "*",
-    "headers": ["libsdi12.h", "sdi12.h", "sdi12_easy.h"],
+    "headers": [
+        "libsdi12.h",
+        "sdi12.h",
+        "sdi12_easy.h"
+    ],
     "build": {
-        "flags": ["-std=c11"],
+        "flags": [
+            "-std=c11"
+        ],
         "srcDir": ".",
         "includeDir": ".",
-        "srcFilter": ["+<*.c>", "-<test/>", "-<examples/>"]
+        "srcFilter": [
+            "+<*.c>",
+            "-<test/>",
+            "-<examples/>"
+        ]
     },
     "examples": [
         "examples/*"
     ],
     "export": {
         "exclude": [
+            "*.log",
+            "debian/",
+            "docs/",
+            "obj-*/",
             "test/test_sdi12",
             "test/test_sdi12.exe"
         ]
