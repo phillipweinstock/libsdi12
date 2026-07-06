@@ -1,10 +1,18 @@
-libsdi12 (0.3.0-1) unstable; urgency=medium
+libsdi12 (0.4.0-1) unstable; urgency=medium
 
   * Initial Debian packaging (Closes: #1130920).
-  * Upstream release 0.3.0:
-    - Full SDI-12 v1.4 spec coverage (sensor + master).
-    - Binary packet framing for aDBn! commands.
-    - CRC-16-IBM with sdi12_crc_append_n for binary payloads.
-    - 98 unit + metamorphic tests.
+  * New upstream release 0.4.0:
+    - Fix D-page pagination: measurements spanning more than one data
+      page previously returned no data at all via aD0!/aD1!.
+    - Master now verifies the CRC on aD/aR responses when requested and
+      rejects responses from the wrong sensor address.
+    - Fix aDBn! binary packet buffer overflow and overlong-value
+      out-of-bounds read on the sensor side.
+    - Spec conformance: breaks no longer abort concurrent measurements
+      (SDI-12 v1.4 sec. 4.4.7); identify CRC variants (aIMC!/aICC!)
+      now include a CRC in the response.
+    - New compile-time SDI12_MAX_RESPONSE_LEN override for full-size
+      1000-byte binary packets.
+    - Test suite grown from 98 to 114 tests.
 
- -- Phillip Weinstock <phillipweinstock@gmail.com>  Sat, 28 Feb 2026 12:00:00 +0000
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Mon, 06 Jul 2026 23:41:27 +1000
