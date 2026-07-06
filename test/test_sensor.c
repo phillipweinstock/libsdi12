@@ -667,3 +667,271 @@ void test_sensor_negative_value_in_data(void)
     /* Response should contain '-' for the negative value */
     TEST_ASSERT_NOT_NULL(strchr(mock_response, '-'));
 }
+
+/* ── D-Page Pagination ──────────────────────────────────────────────────── */
+
+/** Every parameter formats as "+1nn.00" — exactly 7 chars. */
+static sdi12_value_t mock_read_wide(uint8_t param_index, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t val = { 100.0f + param_index, 2 };
+    return val;
+}
+
+/** Context with 9 identical-width params: 5 fit on page 0 (5×7 = 35 chars,
+ *  the M-mode limit), the remaining 4 must appear on page 1. */
+static sdi12_sensor_ctx_t create_paging_ctx(char address)
+{
+    sdi12_sensor_ctx_t ctx;
+
+    sdi12_ident_t ident;
+    memset(&ident, 0, sizeof(ident));
+    memcpy(ident.vendor, "TESTCO  ", SDI12_ID_VENDOR_LEN);
+    memcpy(ident.model, "MOD001", SDI12_ID_MODEL_LEN);
+    memcpy(ident.firmware_version, "100", SDI12_ID_FWVER_LEN);
+
+    sdi12_sensor_callbacks_t cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.send_response = mock_send_response;
+    cb.set_direction = mock_set_direction;
+    cb.read_param    = mock_read_wide;
+
+    sdi12_sensor_init(&ctx, address, &ident, &cb);
+
+    for (int i = 0; i < 9; i++) {
+        sdi12_sensor_register_param(&ctx, 0, "TA", "C", 2);
+    }
+
+    return ctx;
+}
+
+void test_sensor_data_pagination_d0(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_paging_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    TEST_ASSERT_EQUAL_STRING("00009\r\n", mock_response);
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+    TEST_ASSERT_EQUAL_STRING("0+100.00+101.00+102.00+103.00+104.00\r\n",
+                             mock_response);
+}
+
+void test_sensor_data_pagination_d1(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_paging_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0D1!", 4);
+    TEST_ASSERT_EQUAL_STRING("0+105.00+106.00+107.00+108.00\r\n",
+                             mock_response);
+}
+
+void test_sensor_data_pagination_past_end(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_paging_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+
+    /* All 9 values fit on pages 0-1 — page 2 must be empty */
+    sdi12_sensor_process(&ctx, "0D2!", 4);
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);
+}
+
+void test_sensor_data_pagination_with_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_paging_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0MC!", 4);
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+    TEST_ASSERT_NOT_NULL(strstr(mock_response, "+100.00"));
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0D1!", 4);
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+    TEST_ASSERT_NOT_NULL(strstr(mock_response, "+105.00"));
+}
+
+/* ── Binary Packet Buffer Bounds (aDBn!) ────────────────────────────────── */
+
+/** Greedy binary formatter: fills every byte the library offers. */
+static size_t mock_format_binary_fill(uint16_t page,
+                                      const sdi12_value_t *values,
+                                      uint8_t count,
+                                      char *buf, size_t buflen,
+                                      void *user_data)
+{
+    (void)page; (void)values; (void)count; (void)user_data;
+    buf[1] = (char)SDI12_BINTYPE_UINT8;
+    for (size_t i = 2; i < buflen; i++)
+        buf[i] = (char)(i & 0x7F);
+    return buflen - 1;  /* type byte + payload, written from buf[1] */
+}
+
+void test_sensor_binary_packet_fits_buffer(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.format_binary_page = mock_format_binary_fill;
+
+    sdi12_sensor_process(&ctx, "0HB!", 4);
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0DB0!", 5);
+
+    /* Whole packet must fit the sensor's response buffer */
+    TEST_ASSERT_LESS_OR_EQUAL(sizeof(ctx.resp_buf), mock_response_len);
+    TEST_ASSERT_GREATER_OR_EQUAL(SDI12_BIN_PKT_OVERHEAD, mock_response_len);
+
+    /* Packet self-consistency: addr + size(2 LE) + type + payload + CRC(2 LE) */
+    uint16_t psz = (uint8_t)mock_response[1] |
+                   ((uint16_t)(uint8_t)mock_response[2] << 8);
+    TEST_ASSERT_EQUAL(mock_response_len - SDI12_BIN_PKT_OVERHEAD, psz);
+
+    uint16_t crc = sdi12_crc16(mock_response, 4 + psz);
+    uint16_t rx  = (uint8_t)mock_response[4 + psz] |
+                   ((uint16_t)(uint8_t)mock_response[4 + psz + 1] << 8);
+    TEST_ASSERT_EQUAL_HEX16(crc, rx);
+}
+
+/* ── Concurrent Measurement Abort Semantics (§4.4.8) ────────────────────── */
+
+static uint16_t mock_start_meas_5s(uint8_t group, sdi12_meas_type_t type,
+                                   void *user_data)
+{
+    (void)group; (void)type; (void)user_data;
+    return 5;
+}
+
+void test_sensor_concurrent_survives_break(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+
+    /* §4.4.8: a break does NOT abort a concurrent measurement */
+    sdi12_sensor_break(&ctx);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+}
+
+void test_sensor_concurrent_aborted_by_addressed_command(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+
+    /* §4.4.7.1: ANY valid command addressed to the sensor — including a
+       D command — aborts a concurrent measurement in progress.  The
+       response to subsequent D commands is just the address + CRLF. */
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);
+    TEST_ASSERT_EQUAL(SDI12_STATE_READY, ctx.state);
+    TEST_ASSERT_FALSE(ctx.data_available);
+}
+
+void test_sensor_concurrent_not_aborted_by_other_address(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+
+    /* Commands to other sensors must not abort (§4.4.7) */
+    sdi12_sensor_process(&ctx, "5M!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+}
+
+/* ── Identify Measurement CRC Variants (aIMC!, aICC!) ───────────────────── */
+
+void test_sensor_identify_mc_has_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0IMC!", 5);
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+}
+
+void test_sensor_identify_cc_has_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0ICC!", 5);
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+}
+
+/* ── Overlong Value Formatting ──────────────────────────────────────────── */
+
+static sdi12_value_t mock_read_overlong(uint8_t param_index, void *user_data)
+{
+    (void)param_index; (void)user_data;
+    /* "+12345.6777344" — 14 chars, exceeds SDI12_VALUE_MAX_CHARS (9) */
+    sdi12_value_t val = { 12345.678f, 7 };
+    return val;
+}
+
+void test_sensor_overlong_value_truncated_safely(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx;
+
+    sdi12_ident_t ident;
+    memset(&ident, 0, sizeof(ident));
+    memcpy(ident.vendor, "TESTCO  ", SDI12_ID_VENDOR_LEN);
+    memcpy(ident.model, "MOD001", SDI12_ID_MODEL_LEN);
+    memcpy(ident.firmware_version, "100", SDI12_ID_FWVER_LEN);
+
+    sdi12_sensor_callbacks_t cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.send_response = mock_send_response;
+    cb.set_direction = mock_set_direction;
+    cb.read_param    = mock_read_overlong;
+
+    sdi12_sensor_init(&ctx, '0', &ident, &cb);
+    sdi12_sensor_register_param(&ctx, 0, "XX", "u", 7);
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* Value must be clamped to SDI12_VALUE_MAX_CHARS — no garbage bytes */
+    size_t len = strlen(mock_response);
+    TEST_ASSERT_LESS_OR_EQUAL(1 + SDI12_VALUE_MAX_CHARS + 2, len);
+    TEST_ASSERT_TRUE(strncmp(mock_response, "0+12345.67", 10) == 0);
+    TEST_ASSERT_EQUAL_CHAR('\r', mock_response[len - 2]);
+    TEST_ASSERT_EQUAL_CHAR('\n', mock_response[len - 1]);
+}
+
+/* ── measurement_done NULL Guard ────────────────────────────────────────── */
+
+void test_sensor_measurement_done_null_values(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.state = SDI12_STATE_MEASURING;
+
+    sdi12_err_t err = sdi12_sensor_measurement_done(&ctx, NULL, 3);
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
+}

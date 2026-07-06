@@ -223,7 +223,7 @@ sdi12_err_t sdi12_master_wait_service_request(sdi12_master_ctx_t *ctx,
  * @param page      Data page 0–9.
  * @param crc       Whether CRC was requested (verifies CRC if true).
  * @param resp      [out] Parsed data response with values.
- * @return SDI12_OK on success, SDI12_ERR_CRC on CRC failure.
+ * @return SDI12_OK on success, SDI12_ERR_CRC_MISMATCH on CRC failure.
  */
 sdi12_err_t sdi12_master_get_data(sdi12_master_ctx_t *ctx,
                                    char addr, uint8_t page, bool crc,
@@ -423,14 +423,17 @@ sdi12_err_t sdi12_master_parse_meas_response(const char *resp_str, size_t len,
  * @param values    [out] Array of parsed values.
  * @param max_values Size of values array.
  * @param count     [out] Number of values parsed.
- * @param verify_crc If true, verify and strip CRC-16 before parsing.
- * @return SDI12_OK on success, SDI12_ERR_CRC if CRC fails.
+ * @param strip_crc If true, drop the trailing 3 CRC chars before parsing.
+ *                  NOTE: this does NOT verify the CRC — verification needs
+ *                  the address character, so it happens in
+ *                  sdi12_master_get_data() / sdi12_master_continuous().
+ * @return SDI12_OK on success.
  */
 sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
                                             sdi12_value_t *values,
                                             uint8_t max_values,
                                             uint8_t *count,
-                                            bool verify_crc);
+                                            bool strip_crc);
 
 #ifdef __cplusplus
 }

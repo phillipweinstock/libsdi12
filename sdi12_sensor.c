@@ -73,52 +73,39 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
     buf[0] = ctx->address;
     size_t pos = 1;
 
-    /* Walk through cached values, skipping those on earlier pages */
+    /* Walk every cached value, tracking which page it falls on.
+     * page_used counts value chars on the current page for ALL values,
+     * not just the ones written, so page boundaries are computed the
+     * same way regardless of which page was requested. */
     uint8_t current_page = 0;
-    uint8_t i = 0;
-    bool any_on_page = false;
+    size_t  page_used = 0;
 
-    while (i < ctx->data_cache_count) {
+    for (uint8_t i = 0; i < ctx->data_cache_count; i++) {
         char vbuf[SDI12_VALUE_MAX_CHARS + 1];
         int vlen = format_value(vbuf, sizeof(vbuf), ctx->data_cache[i]);
 
-        if (vlen <= 0) {
-            i++;
-            continue;
-        }
+        if (vlen <= 0) continue;
+        /* snprintf returns the untruncated length — clamp to what was
+         * actually written so an overlong value can't smuggle garbage */
+        if ((size_t)vlen > sizeof(vbuf) - 1) vlen = (int)(sizeof(vbuf) - 1);
 
-        /* Would this value fit on the current page? */
-        size_t page_used = pos - 1; /* subtract address char */
-        if (current_page > 0) {
-            /* Reset for new page tracking — pos is already at address */
-            /* This is tracked implicitly */
-        }
-
+        /* Value doesn't fit on the current page — advance to the next */
         if (page_used + (size_t)vlen > max_value_chars && page_used > 0) {
-            /* Start a new page */
             current_page++;
-            pos = 1; /* reset (address already placed) */
             page_used = 0;
         }
 
+        if (current_page > page) break;
+
         if (current_page == page) {
-            /* This value belongs to the requested page */
             if (pos + (size_t)vlen >= buflen - 6) { /* room for CRC + CRLF + null */
                 break;
             }
             memcpy(buf + pos, vbuf, (size_t)vlen);
             pos += (size_t)vlen;
-            any_on_page = true;
-        } else if (current_page > page) {
-            break;
         }
 
-        i++;
-    }
-
-    if (!any_on_page && page > 0) {
-        /* Empty page — just respond with address */
-        pos = 1;
+        page_used += (size_t)vlen;
     }
 
     buf[pos] = '\0';
@@ -316,8 +303,17 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
     }
 
     /* cb_bytes = type(1) + raw_data(N), so payload_size = cb_bytes - 1 */
+    if (cb_bytes > sizeof(tmpbuf) - 1)
+        cb_bytes = sizeof(tmpbuf) - 1;
+
     uint8_t data_type = (uint8_t)tmpbuf[1];
     uint16_t payload_size = (uint16_t)(cb_bytes - 1);
+
+    /* The full packet (addr + size + type + payload + CRC) must fit the
+     * response buffer — clamp the payload so the CRC never lands past it. */
+    size_t max_payload = sizeof(ctx->resp_buf) - SDI12_BIN_PKT_OVERHEAD;
+    if (payload_size > max_payload)
+        payload_size = (uint16_t)max_payload;
 
     /* Build binary packet: addr + pkt_size(2 LE) + type + payload + CRC(2 LE) */
     pkt[0] = ctx->address;
@@ -361,6 +357,8 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
             ctx->resp_buf, sizeof(ctx->resp_buf),
             ctx->cb.user_data);
         size_t pos = 1 + payload;  /* address + binary payload */
+        if (pos > sizeof(ctx->resp_buf) - 6)
+            pos = sizeof(ctx->resp_buf) - 6; /* room for CRC + CRLF + null */
 
         if (ctx->crc_requested) {
             /* Append CRC using explicit length (binary may contain NUL) */
@@ -544,66 +542,83 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
         return SDI12_OK;
     }
 
-    /* Non-parameter metadata — return measurement capability summary */
+    /* Non-parameter metadata — return measurement capability summary.
+     * CRC command variants (aIMC!, aICC!, aIHAC!, aIRC0!, …) get a CRC
+     * appended to the response, matching the underlying command. */
     uint8_t group = 0;
+    bool resp_crc = false;
 
     switch (subcmd) {
     case 'M': {
         /* aIM!, aIM1!–aIM9!, aIMC!, aIMC1!–aIMC9! */
-        bool crc = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = crc ? 4 : 3;
+        resp_crc = (len > 3 && cmd[3] == 'C');
+        size_t digit_pos = resp_crc ? 4 : 3;
         if (digit_pos < len && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
             group = (uint8_t)(cmd[digit_pos] - '0');
         }
         uint8_t n = count_group(ctx, group);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%u\r\n", ctx->address, n > 9 ? 9 : n);
+                 "%c000%u", ctx->address, n > 9 ? 9 : n);
     } break;
 
     case 'C': {
         /* aIC!, aIC1!–aIC9!, aICC!, aICC1!–aICC9! */
-        bool crc = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = crc ? 4 : 3;
+        resp_crc = (len > 3 && cmd[3] == 'C');
+        size_t digit_pos = resp_crc ? 4 : 3;
         if (digit_pos < len && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
             group = (uint8_t)(cmd[digit_pos] - '0');
         }
         uint8_t n = count_group(ctx, group);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%02u\r\n", ctx->address, n > 99 ? 99 : n);
+                 "%c000%02u", ctx->address, n > 99 ? 99 : n);
     } break;
 
     case 'V': {
         uint8_t n = count_group(ctx, 0);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%u\r\n", ctx->address, n > 9 ? 9 : n);
+                 "%c000%u", ctx->address, n > 9 ? 9 : n);
     } break;
 
     case 'H': {
-        /* aIHA!, aIHB! */
+        /* aIHA!, aIHB!, aIHAC!, aIHBC! */
         if (len > 3 && (cmd[3] == 'A' || cmd[3] == 'B')) {
+            resp_crc = (len > 4 && cmd[4] == 'C');
             uint8_t n = count_group(ctx, 0);
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000%03u\r\n", ctx->address, (unsigned)n);
+                     "%c000%03u", ctx->address, (unsigned)n);
         } else {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000000\r\n", ctx->address);
+                     "%c000000", ctx->address);
         }
     } break;
 
     case 'R': {
-        /* aIR0!–aIR9! — describe continuous measurement capability */
-        if (len > 3 && cmd[3] >= '0' && cmd[3] <= '9') {
-            group = (uint8_t)(cmd[3] - '0');
+        /* aIR0!–aIR9!, aIRC0!–aIRC9! — continuous capability */
+        resp_crc = (len > 3 && cmd[3] == 'C');
+        size_t digit_pos = resp_crc ? 4 : 3;
+        if (digit_pos < len && cmd[digit_pos] >= '0' && cmd[digit_pos] <= '9') {
+            group = (uint8_t)(cmd[digit_pos] - '0');
         }
         uint8_t n = count_group(ctx, group);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%02u\r\n", ctx->address, n > 99 ? 99 : n);
+                 "%c000%02u", ctx->address, n > 99 ? 99 : n);
     } break;
 
     default:
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c0000\r\n", ctx->address);
+                 "%c0000", ctx->address);
         break;
+    }
+
+    if (resp_crc) {
+        sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
+    } else {
+        size_t slen = strlen(ctx->resp_buf);
+        if (slen + 2 < sizeof(ctx->resp_buf)) {
+            ctx->resp_buf[slen]     = '\r';
+            ctx->resp_buf[slen + 1] = '\n';
+            ctx->resp_buf[slen + 2] = '\0';
+        }
     }
 
     send_response(ctx);
@@ -892,12 +907,12 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
                                            const sdi12_value_t *values,
                                            uint8_t count)
 {
-    if (!ctx) return SDI12_ERR_INVALID_COMMAND;
+    if (!ctx || (!values && count > 0)) return SDI12_ERR_INVALID_COMMAND;
 
     /* Store the values in the cache */
     uint8_t n = count;
     if (n > SDI12_MAX_PARAMS) n = SDI12_MAX_PARAMS;
-    memcpy(ctx->data_cache, values, n * sizeof(sdi12_value_t));
+    if (n > 0) memcpy(ctx->data_cache, values, n * sizeof(sdi12_value_t));
     ctx->data_cache_count = n;
     ctx->data_available = true;
 
@@ -925,9 +940,12 @@ void sdi12_sensor_break(sdi12_sensor_ctx_t *ctx)
 {
     if (!ctx) return;
 
-    /* Abort any pending measurement */
-    if (ctx->state == SDI12_STATE_MEASURING ||
-        ctx->state == SDI12_STATE_MEASURING_C) {
+    /* A concurrent measurement continues through breaks (§4.4.7) —
+       the recorder wakes the sensor with a break before issuing D0. */
+    if (ctx->state == SDI12_STATE_MEASURING_C) return;
+
+    /* A break aborts a standard measurement (§4.4.5.1) */
+    if (ctx->state == SDI12_STATE_MEASURING) {
         ctx->data_available = false;
         ctx->data_cache_count = 0;
     }

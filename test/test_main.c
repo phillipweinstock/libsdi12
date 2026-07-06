@@ -85,6 +85,18 @@ extern void test_sensor_group_count(void);
 extern void test_sensor_measurement_done_service_request(void);
 extern void test_sensor_measurement_done_concurrent_no_sr(void);
 extern void test_sensor_negative_value_in_data(void);
+extern void test_sensor_data_pagination_d0(void);
+extern void test_sensor_data_pagination_d1(void);
+extern void test_sensor_data_pagination_past_end(void);
+extern void test_sensor_data_pagination_with_crc(void);
+extern void test_sensor_binary_packet_fits_buffer(void);
+extern void test_sensor_concurrent_survives_break(void);
+extern void test_sensor_concurrent_aborted_by_addressed_command(void);
+extern void test_sensor_concurrent_not_aborted_by_other_address(void);
+extern void test_sensor_identify_mc_has_crc(void);
+extern void test_sensor_identify_cc_has_crc(void);
+extern void test_sensor_overlong_value_truncated_safely(void);
+extern void test_sensor_measurement_done_null_values(void);
 
 /* test_master.c */
 extern void test_parse_meas_m_basic(void);
@@ -108,6 +120,10 @@ extern void test_parse_values_with_crc_strip(void);
 extern void test_parse_values_large_value(void);
 extern void test_parse_values_mixed_signs(void);
 extern void test_parse_values_null_args(void);
+extern void test_master_get_data_crc_verified_ok(void);
+extern void test_master_get_data_crc_corrupt_detected(void);
+extern void test_master_get_data_wrong_address_rejected(void);
+extern void test_master_identify_wrong_address_rejected(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -140,6 +156,9 @@ extern void test_meta_parse_meas_address_passthrough(void);
 
 int main(void)
 {
+    /* Unbuffered stdout so results survive a crash mid-run */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     UNITY_BEGIN();
 
     /* ── CRC-16 ─────────────────────────────────────────────────────────── */
@@ -205,6 +224,17 @@ int main(void)
     RUN_TEST(test_sensor_measurement_done_service_request);
     RUN_TEST(test_sensor_measurement_done_concurrent_no_sr);
     RUN_TEST(test_sensor_negative_value_in_data);
+    RUN_TEST(test_sensor_data_pagination_d0);
+    RUN_TEST(test_sensor_data_pagination_d1);
+    RUN_TEST(test_sensor_data_pagination_past_end);
+    RUN_TEST(test_sensor_data_pagination_with_crc);
+    RUN_TEST(test_sensor_binary_packet_fits_buffer);
+    RUN_TEST(test_sensor_concurrent_survives_break);
+    RUN_TEST(test_sensor_concurrent_aborted_by_addressed_command);
+    RUN_TEST(test_sensor_concurrent_not_aborted_by_other_address);
+    RUN_TEST(test_sensor_identify_mc_has_crc);
+    RUN_TEST(test_sensor_identify_cc_has_crc);
+    RUN_TEST(test_sensor_overlong_value_truncated_safely);
 
     /* ── Master (Data Recorder) ─────────────────────────────────────────── */
     RUN_TEST(test_parse_meas_m_basic);
@@ -228,6 +258,10 @@ int main(void)
     RUN_TEST(test_parse_values_large_value);
     RUN_TEST(test_parse_values_mixed_signs);
     RUN_TEST(test_parse_values_null_args);
+    RUN_TEST(test_master_get_data_crc_verified_ok);
+    RUN_TEST(test_master_get_data_crc_corrupt_detected);
+    RUN_TEST(test_master_get_data_wrong_address_rejected);
+    RUN_TEST(test_master_identify_wrong_address_rejected);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);
@@ -255,6 +289,9 @@ int main(void)
     RUN_TEST(test_meta_parse_deterministic);
     RUN_TEST(test_meta_parse_decimal_count_matches_input);
     RUN_TEST(test_meta_parse_meas_address_passthrough);
+
+    /* Runs last: a regression here previously segfaulted */
+    RUN_TEST(test_sensor_measurement_done_null_values);
 
     return UNITY_END();
 }

@@ -273,16 +273,16 @@ void test_meta_sensor_measurement_deterministic(void)
 }
 
 /**
- * Property: Break always returns sensor to READY state,
- * regardless of what state it was in before.
+ * Property: Break returns the sensor to READY from every state EXCEPT
+ * a concurrent measurement — §4.4.8: concurrent measurements continue
+ * through break signals.
  */
 void test_meta_sensor_break_returns_ready_from_any_state(void)
 {
     sdi12_state_t states[] = {
         SDI12_STATE_READY,
         SDI12_STATE_DATA_READY,
-        SDI12_STATE_MEASURING,
-        SDI12_STATE_MEASURING_C
+        SDI12_STATE_MEASURING
     };
 
     for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); i++) {
@@ -293,6 +293,14 @@ void test_meta_sensor_break_returns_ready_from_any_state(void)
         sdi12_sensor_break(&ctx);
         TEST_ASSERT_EQUAL(SDI12_STATE_READY, ctx.state);
     }
+
+    /* Concurrent measurement survives a break */
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.state = SDI12_STATE_MEASURING_C;
+
+    sdi12_sensor_break(&ctx);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
 }
 
 /**

@@ -213,6 +213,7 @@ sdi12_err_t sdi12_master_identify(sdi12_master_ctx_t *ctx,
      * serial = 0-13 chars optional serial number
      */
     if (len < 20) return SDI12_ERR_INVALID_COMMAND; /* Minimum: 1+2+8+6+3 = 20 */
+    if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
     memset(ident, 0, sizeof(*ident));
 
@@ -333,23 +334,35 @@ sdi12_err_t sdi12_master_get_data(sdi12_master_ctx_t *ctx,
     if (!ctx || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
+    memset(resp, 0, sizeof(*resp));
+
     char cmd[8];
     snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
-    size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+    /* Verify CRC over the raw response (address included) before parsing */
+    if (crc && !sdi12_crc_verify(ctx->resp_buf, ctx->resp_len)) {
+        return SDI12_ERR_CRC_MISMATCH;
+    }
 
-    /* Skip address character */
+    size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
     if (len < 1) return SDI12_ERR_INVALID_COMMAND;
+    if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
     resp->address = ctx->resp_buf[0];
+
+    if (crc) {
+        resp->crc_valid = true;
+        if (len < 4) return SDI12_ERR_PARSE_FAILED;
+        len -= 3; /* drop the 3 verified CRC chars */
+    }
 
     return sdi12_master_parse_data_values(
         ctx->resp_buf + 1, len - 1,
         resp->values, SDI12_MAX_VALUES,
-        &resp->value_count, crc);
+        &resp->value_count, false);
 }
 
 sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
@@ -359,6 +372,8 @@ sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
     if (!ctx || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
+    memset(resp, 0, sizeof(*resp));
+
     char cmd[8];
     if (crc) snprintf(cmd, sizeof(cmd), "%cRC%u!", addr, index);
     else     snprintf(cmd, sizeof(cmd), "%cR%u!", addr, index);
@@ -366,15 +381,27 @@ sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
+    /* Verify CRC over the raw response (address included) before parsing */
+    if (crc && !sdi12_crc_verify(ctx->resp_buf, ctx->resp_len)) {
+        return SDI12_ERR_CRC_MISMATCH;
+    }
+
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
     if (len < 1) return SDI12_ERR_INVALID_COMMAND;
+    if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
     resp->address = ctx->resp_buf[0];
+
+    if (crc) {
+        resp->crc_valid = true;
+        if (len < 4) return SDI12_ERR_PARSE_FAILED;
+        len -= 3; /* drop the 3 verified CRC chars */
+    }
 
     return sdi12_master_parse_data_values(
         ctx->resp_buf + 1, len - 1,
         resp->values, SDI12_MAX_VALUES,
-        &resp->value_count, crc);
+        &resp->value_count, false);
 }
 
 sdi12_err_t sdi12_master_verify(sdi12_master_ctx_t *ctx,
@@ -610,7 +637,7 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
                                             sdi12_value_t *values,
                                             uint8_t max_values,
                                             uint8_t *count,
-                                            bool verify_crc)
+                                            bool strip_crc)
 {
     if (!resp_str || !values || !count) return SDI12_ERR_INVALID_COMMAND;
 
@@ -618,7 +645,7 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
 
     /* If CRC verification requested, check and strip CRC (last 3 chars) */
     size_t data_len = len;
-    if (verify_crc && data_len >= 3) {
+    if (strip_crc && data_len >= 3) {
         /* We need to reconstruct the full response with address for CRC check.
          * Since the caller has stripped the address, we just verify the CRC
          * bytes at the end of the data. The CRC covers address + values. */

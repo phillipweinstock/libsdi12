@@ -235,3 +235,106 @@ void test_parse_values_null_args(void)
     TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
         sdi12_master_parse_data_values("+1", 2, vals, 10, NULL, false));
 }
+
+/* ── Transaction-Level Tests (scripted I/O) ─────────────────────────────── */
+
+static char   m_last_cmd[64];
+static char   m_reply[128];
+static size_t m_reply_len;
+
+static void m_send(const char *data, size_t len, void *user_data)
+{
+    (void)user_data;
+    if (len > sizeof(m_last_cmd) - 1) len = sizeof(m_last_cmd) - 1;
+    memcpy(m_last_cmd, data, len);
+    m_last_cmd[len] = '\0';
+}
+
+static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data)
+{
+    (void)timeout_ms; (void)user_data;
+    size_t n = m_reply_len < max ? m_reply_len : max;
+    memcpy(buf, m_reply, n);
+    m_reply_len = 0;  /* one-shot reply */
+    return n;
+}
+
+static void m_dir(sdi12_dir_t dir, void *user_data) { (void)dir; (void)user_data; }
+static void m_brk(void *user_data)                  { (void)user_data; }
+static void m_dly(uint32_t ms, void *user_data)     { (void)ms; (void)user_data; }
+
+static sdi12_master_ctx_t make_scripted_master(void)
+{
+    sdi12_master_ctx_t m;
+    sdi12_master_callbacks_t cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.send          = m_send;
+    cb.recv          = m_recv;
+    cb.set_direction = m_dir;
+    cb.send_break    = m_brk;
+    cb.delay         = m_dly;
+    sdi12_master_init(&m, &cb);
+    return m;
+}
+
+static void set_reply(const char *s)
+{
+    m_reply_len = strlen(s);
+    memcpy(m_reply, s, m_reply_len);
+}
+
+void test_master_get_data_crc_verified_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    char reply[64] = "0+1.23+4.56";
+    sdi12_crc_append(reply, sizeof(reply));  /* appends CRC + CRLF */
+    set_reply(reply);
+
+    sdi12_data_response_t d;
+    sdi12_err_t err = sdi12_master_get_data(&m, '0', 0, true, &d);
+
+    TEST_ASSERT_EQUAL(SDI12_OK, err);
+    TEST_ASSERT_EQUAL(2, d.value_count);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.23f, d.values[0].value);
+    TEST_ASSERT_TRUE(d.crc_valid);
+}
+
+void test_master_get_data_crc_corrupt_detected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    char reply[64] = "0+1.23+4.56";
+    sdi12_crc_append(reply, sizeof(reply));
+    reply[2] = '9';  /* corrupt a data digit after the CRC was computed */
+    set_reply(reply);
+
+    sdi12_data_response_t d;
+    sdi12_err_t err = sdi12_master_get_data(&m, '0', 0, true, &d);
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_CRC_MISMATCH, err);
+}
+
+void test_master_get_data_wrong_address_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    set_reply("5+1.23\r\n");  /* response from a different sensor */
+
+    sdi12_data_response_t d;
+    sdi12_err_t err = sdi12_master_get_data(&m, '0', 0, false, &d);
+
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
+}
+
+void test_master_identify_wrong_address_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    set_reply("514AAAAAAAABBBBBB123\r\n");  /* valid format, address '5' */
+
+    sdi12_ident_t ident;
+    sdi12_err_t err = sdi12_master_identify(&m, '0', &ident);
+
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
+}
