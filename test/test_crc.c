@@ -203,3 +203,15 @@ void test_crc16_update_matches_one_shot(void)
     /* Zero-length update is a no-op */
     TEST_ASSERT_EQUAL_HEX16(inc, sdi12_crc16_update(inc, msg, 0));
 }
+
+/* Spec 4.4.12.3 worked examples pin the exact CRC algorithm. */
+void test_crc_spec_ascii_vectors(void)
+{
+    char a[32] = "0+3.14";
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_crc_append(a, sizeof(a)));
+    TEST_ASSERT_EQUAL_STRING("0+3.14OqZ\r\n", a);
+
+    char b[48] = "0+1.11+2.22+3.33+4.44+5.55+6.66";
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_crc_append(b, sizeof(b)));
+    TEST_ASSERT_EQUAL_STRING("0+1.11+2.22+3.33+4.44+5.55+6.66I]q\r\n", b);
+}

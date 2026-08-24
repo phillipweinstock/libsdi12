@@ -175,7 +175,10 @@ sdi12_err_t sdi12_master_change_address(sdi12_master_ctx_t *ctx,
     char cmd[8];
     snprintf(cmd, sizeof(cmd), "%cA%c!", old_addr, new_addr);
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    /* §4.4.4: the sensor may take up to one second to persist the new
+     * address (EEPROM write) before it responds. */
+    sdi12_err_t err = sdi12_master_transact(
+        ctx, cmd, SDI12_ADDRESS_CHANGE_DELAY_MS + SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -261,6 +264,8 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
 {
     if (!ctx || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+    /* Groups run M/C only, 1-9 (0 = base command) */
+    if (group > 9) return SDI12_ERR_INVALID_COMMAND;
 
     /* Build command */
     char cmd[16];
@@ -290,13 +295,15 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
         break;
 
     case SDI12_MEAS_HIGHVOL_ASCII:
-        if (crc) snprintf(cmd, sizeof(cmd), "%cHAC!", addr);
-        else     snprintf(cmd, sizeof(cmd), "%cHA!", addr);
+        /* The spec defines no aHAC! — the CRC on the data pages is
+         * mandatory regardless (§5.1), so the crc flag is moot here. */
+        (void)crc;
+        snprintf(cmd, sizeof(cmd), "%cHA!", addr);
         break;
 
     case SDI12_MEAS_HIGHVOL_BINARY:
-        if (crc) snprintf(cmd, sizeof(cmd), "%cHBC!", addr);
-        else     snprintf(cmd, sizeof(cmd), "%cHB!", addr);
+        /* Likewise no aHBC! — binary packets always carry a CRC. */
+        snprintf(cmd, sizeof(cmd), "%cHB!", addr);
         break;
 
     default:
@@ -307,6 +314,7 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+    if (len < 1 || ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
     return sdi12_master_parse_meas_response(ctx->resp_buf, len, type, resp);
 }
 
@@ -374,6 +382,8 @@ sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
 {
     if (!ctx || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+
+    if (index > 9) return SDI12_ERR_INVALID_COMMAND;
 
     memset(resp, 0, sizeof(*resp));
 
@@ -722,12 +732,24 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
-    /* Response: a<data>\r\n — skip address, trim CRLF */
+    /* Response: a<data><CRC>\r\n — skip address, trim CRLF */
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
     if (len < 1) return SDI12_ERR_PARSE_FAILED;
     if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
-    size_t data_len = len - 1; /* skip address */
+    if (len == 1) {
+        /* Bare address — no more data */
+        *raw_len = 0;
+        return SDI12_OK;
+    }
+
+    /* §5.1: "a three character <CRC> is appended to the data before
+     * the <CR><LF>. The CRC must be present." Verify it, then strip
+     * it so the caller receives values only. */
+    if (len < 1 + 3 || !sdi12_crc_verify(ctx->resp_buf, len))
+        return SDI12_ERR_CRC_MISMATCH;
+
+    size_t data_len = len - 1 - 3; /* skip address, drop CRC */
     if (data_len > *raw_len) data_len = *raw_len;
 
     memcpy(raw_buf, ctx->resp_buf + 1, data_len);

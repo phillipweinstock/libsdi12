@@ -244,6 +244,7 @@ static size_t m_reply_len;
 static size_t m_reply_pos;
 static bool   m_line_mode;    /* recv returns at most one line per call */
 static int    m_break_count;
+static uint32_t m_last_timeout;
 
 static void m_send(const char *data, size_t len, void *user_data)
 {
@@ -258,7 +259,8 @@ static void m_send(const char *data, size_t len, void *user_data)
  * their slice. Exhausted reply returns 0 (timeout). */
 static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data)
 {
-    (void)timeout_ms; (void)user_data;
+    (void)user_data;
+    m_last_timeout = timeout_ms;
     size_t remain = m_reply_len - m_reply_pos;
     size_t n = remain < max ? remain : max;
     if (m_line_mode) {
@@ -700,7 +702,10 @@ void test_master_identify_param_metadata(void)
 void test_master_get_hv_data_raw(void)
 {
     sdi12_master_ctx_t m = make_scripted_master();
-    set_reply("0+1+2+3\r\n");
+
+    char reply[64] = "0+1+2+3";
+    sdi12_crc_append(reply, sizeof(reply));  /* §5.1: CRC is mandatory */
+    set_reply(reply);
 
     char raw[32];
     size_t raw_len = sizeof(raw);
@@ -728,6 +733,93 @@ void test_master_send_break_invokes_callback(void)
 
     TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_send_break(&m));
     TEST_ASSERT_EQUAL(1, m_break_count);
+}
+
+/* ── Spec Conformance: HV commands, CRC mandate, ranges, timeouts ───────── */
+
+void test_master_hv_commands_are_plain(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0000009\r\n");
+
+    sdi12_meas_response_t r;
+    /* The spec defines no aHAC!/aHBC! — crc=true must still send aHA!
+     * (the CRC on HV ASCII pages is mandatory regardless, §5.1). */
+    sdi12_master_start_measurement(&m, '0', SDI12_MEAS_HIGHVOL_ASCII,
+                                   0, true, &r);
+    TEST_ASSERT_EQUAL_STRING("0HA!", m_last_cmd);
+
+    set_reply("0000009\r\n");
+    sdi12_master_start_measurement(&m, '0', SDI12_MEAS_HIGHVOL_BINARY,
+                                   0, true, &r);
+    TEST_ASSERT_EQUAL_STRING("0HB!", m_last_cmd);
+}
+
+void test_master_get_hv_data_verifies_and_strips_crc(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    char reply[64] = "0+1.5+2.5";
+    sdi12_crc_append(reply, sizeof(reply));  /* adds CRC + CRLF */
+    set_reply(reply);
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_get_hv_data(&m, '0', 0, raw, &raw_len));
+    TEST_ASSERT_EQUAL(8, raw_len);           /* "+1.5+2.5", CRC stripped */
+    TEST_ASSERT_EQUAL_INT(0, memcmp("+1.5+2.5", raw, 8));
+}
+
+void test_master_get_hv_data_missing_crc_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0+1+2\r\n");  /* no CRC — §5.1 says it must be present */
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_ERR_CRC_MISMATCH,
+                      sdi12_master_get_hv_data(&m, '0', 0, raw, &raw_len));
+}
+
+void test_master_start_measurement_wrong_address_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("50005\r\n");  /* response from sensor '5', we asked '0' */
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_STANDARD, 0, false, &r));
+}
+
+void test_master_measurement_group_range_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("00005\r\n");
+
+    sdi12_meas_response_t r;
+    /* group 10 would build the invalid command "0M10!" */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+        sdi12_master_start_measurement(&m, '0', SDI12_MEAS_STANDARD,
+                                       10, false, &r));
+
+    sdi12_data_response_t d;
+    /* continuous index 10 would build the invalid command "0R10!" */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+        sdi12_master_continuous(&m, '0', 10, false, &d));
+}
+
+void test_master_change_address_allows_persist_time(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("5\r\n");
+
+    sdi12_master_change_address(&m, '0', '5');
+
+    /* §4.4.4: the sensor may take up to one second to persist its new
+     * address before responding — a 15 ms first-byte window false-fails
+     * every EEPROM-writing sensor. */
+    TEST_ASSERT_TRUE(m_last_timeout >= 1000);
 }
 
 void test_master_bintype_sizes(void)

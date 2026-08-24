@@ -39,6 +39,7 @@ extern void test_crc_verify_corrupt_crc(void);
 extern void test_crc_verify_too_short(void);
 extern void test_crc_roundtrip_various(void);
 extern void test_crc16_update_matches_one_shot(void);
+extern void test_crc_spec_ascii_vectors(void);
 
 /* test_address.c */
 extern void test_valid_digits(void);
@@ -102,6 +103,18 @@ extern void test_sensor_measurement_done_null_values(void);
 extern void test_sensor_nonfinite_values_emit_valid_sentinels(void);
 extern void test_sensor_huge_values_clamped_to_spec_max(void);
 extern void test_sensor_decimals_clamped_to_fit_nine_chars(void);
+extern void test_sensor_ha_pages_carry_mandatory_crc(void);
+extern void test_sensor_ic_param_metadata_no_crc(void);
+extern void test_sensor_iha_param_metadata_has_crc(void);
+extern void test_sensor_imc_identify_summary_no_crc(void);
+extern void test_sensor_metadata_preserves_crc_request(void);
+extern void test_sensor_empty_hv_uses_seven_digits(void);
+extern void test_sensor_malformed_m_ignored(void);
+extern void test_sensor_overlong_address_change_ignored(void);
+extern void test_sensor_bare_h_ignored(void);
+extern void test_sensor_bare_ir_ignored(void);
+extern void test_sensor_decimals0_rounds(void);
+extern void test_sensor_identify_meas_reports_ttt(void);
 
 /* test_master.c */
 extern void test_parse_meas_m_basic(void);
@@ -156,6 +169,12 @@ extern void test_master_get_hv_data_raw(void);
 extern void test_master_get_hv_data_wrong_address_rejected(void);
 extern void test_master_send_break_invokes_callback(void);
 extern void test_master_bintype_sizes(void);
+extern void test_master_hv_commands_are_plain(void);
+extern void test_master_get_hv_data_verifies_and_strips_crc(void);
+extern void test_master_get_hv_data_missing_crc_rejected(void);
+extern void test_master_start_measurement_wrong_address_rejected(void);
+extern void test_master_measurement_group_range_rejected(void);
+extern void test_master_change_address_allows_persist_time(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -210,6 +229,7 @@ int main(void)
     RUN_TEST(test_crc_verify_too_short);
     RUN_TEST(test_crc_roundtrip_various);
     RUN_TEST(test_crc16_update_matches_one_shot);
+    RUN_TEST(test_crc_spec_ascii_vectors);
 
     /* ── Address Validation ─────────────────────────────────────────────── */
     RUN_TEST(test_valid_digits);
@@ -323,6 +343,12 @@ int main(void)
     RUN_TEST(test_master_get_hv_data_wrong_address_rejected);
     RUN_TEST(test_master_send_break_invokes_callback);
     RUN_TEST(test_master_bintype_sizes);
+    RUN_TEST(test_master_hv_commands_are_plain);
+    RUN_TEST(test_master_get_hv_data_verifies_and_strips_crc);
+    RUN_TEST(test_master_get_hv_data_missing_crc_rejected);
+    RUN_TEST(test_master_start_measurement_wrong_address_rejected);
+    RUN_TEST(test_master_measurement_group_range_rejected);
+    RUN_TEST(test_master_change_address_allows_persist_time);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);
@@ -354,6 +380,18 @@ int main(void)
     RUN_TEST(test_sensor_nonfinite_values_emit_valid_sentinels);
     RUN_TEST(test_sensor_huge_values_clamped_to_spec_max);
     RUN_TEST(test_sensor_decimals_clamped_to_fit_nine_chars);
+    RUN_TEST(test_sensor_ha_pages_carry_mandatory_crc);
+    RUN_TEST(test_sensor_ic_param_metadata_no_crc);
+    RUN_TEST(test_sensor_iha_param_metadata_has_crc);
+    RUN_TEST(test_sensor_imc_identify_summary_no_crc);
+    RUN_TEST(test_sensor_metadata_preserves_crc_request);
+    RUN_TEST(test_sensor_empty_hv_uses_seven_digits);
+    RUN_TEST(test_sensor_malformed_m_ignored);
+    RUN_TEST(test_sensor_overlong_address_change_ignored);
+    RUN_TEST(test_sensor_bare_h_ignored);
+    RUN_TEST(test_sensor_bare_ir_ignored);
+    RUN_TEST(test_sensor_decimals0_rounds);
+    RUN_TEST(test_sensor_identify_meas_reports_ttt);
 
     /* Runs last: a regression here previously segfaulted */
     RUN_TEST(test_sensor_measurement_done_null_values);

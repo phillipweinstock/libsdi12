@@ -458,16 +458,18 @@ void test_sensor_change_address_invalid(void)
     TEST_ASSERT_EQUAL_CHAR('0', ctx.address); /* unchanged */
 }
 
-/* ── High-Volume Stubs (aH!) ───────────────────────────────────────────── */
+/* ── High-Volume Command Grammar ────────────────────────────────────────── */
 
 void test_sensor_highvol_stub(void)
 {
     reset_mocks();
     sdi12_sensor_ctx_t ctx = create_test_ctx('0');
 
+    /* aH! is not an SDI-12 command — only aHA! and aHB! exist, so the
+     * sensor must stay silent (§7.0). */
     sdi12_err_t err = sdi12_sensor_process(&ctx, "0H!", 3);
-    TEST_ASSERT_EQUAL(SDI12_OK, err);
-    TEST_ASSERT_EQUAL_STRING("0000000\r\n", mock_response);
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
 }
 
 /* ── Break Handling ─────────────────────────────────────────────────────── */
@@ -869,8 +871,10 @@ void test_sensor_identify_mc_has_crc(void)
     reset_mocks();
     sdi12_sensor_ctx_t ctx = create_test_ctx('0');
 
+    /* Table 19: identify-measurement summaries never carry a CRC,
+     * including the aIMC! form — the response is plain atttn. */
     sdi12_sensor_process(&ctx, "0IMC!", 5);
-    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+    TEST_ASSERT_EQUAL_STRING("00005\r\n", mock_response);
 }
 
 void test_sensor_identify_cc_has_crc(void)
@@ -878,8 +882,9 @@ void test_sensor_identify_cc_has_crc(void)
     reset_mocks();
     sdi12_sensor_ctx_t ctx = create_test_ctx('0');
 
+    /* Table 19: aICC! responds plain atttnn — no CRC */
     sdi12_sensor_process(&ctx, "0ICC!", 5);
-    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+    TEST_ASSERT_EQUAL_STRING("000005\r\n", mock_response);
 }
 
 /* ── Overlong Value Formatting ──────────────────────────────────────────── */
@@ -1021,4 +1026,195 @@ void test_sensor_decimals_clamped_to_fit_nine_chars(void)
      * an over-long string. 0.9999999 rounds to 1.000000; a chop would
      * emit +0.999999. */
     TEST_ASSERT_EQUAL_STRING("0+1.000000+1+1+1+1\r\n", mock_response);
+}
+
+/* ── High-Volume ASCII Mandatory CRC (§5.1) ─────────────────────────────── */
+
+void test_sensor_ha_pages_carry_mandatory_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0HA!", 4);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* §5.1: "a three character <CRC> is appended to the data before
+     * the <CR><LF>. The CRC must be present." — no aHAC! needed. */
+    size_t len = mock_response_len;
+    while (len > 0 && (mock_response[len - 1] == '\r' ||
+                       mock_response[len - 1] == '\n'))
+        len--;
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, len));
+}
+
+/* ── Identify-Metadata CRC Polarity (§6.1 Table 19, §6.2 Table 20) ──────── */
+
+void test_sensor_ic_param_metadata_no_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0IC_001!", 8);
+
+    /* Table 20: aIC_nnn! responses end with the semicolon — no CRC */
+    TEST_ASSERT_TRUE(mock_response_len >= 3);
+    TEST_ASSERT_EQUAL_CHAR(';', mock_response[mock_response_len - 3]);
+}
+
+void test_sensor_iha_param_metadata_has_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0IHA_001!", 9);
+
+    /* Table 20: aIHA_nnn! responses carry a CRC */
+    size_t len = mock_response_len;
+    while (len > 0 && (mock_response[len - 1] == '\r' ||
+                       mock_response[len - 1] == '\n'))
+        len--;
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, len));
+}
+
+void test_sensor_imc_identify_summary_no_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0IMC!", 5);
+
+    /* Table 19: every identify-measurement summary is atttn<CR><LF>,
+     * with no CRC — including the aIMC! form. */
+    TEST_ASSERT_EQUAL_STRING("00005\r\n", mock_response);
+}
+
+void test_sensor_metadata_preserves_crc_request(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0MC!", 4);
+    sdi12_sensor_process(&ctx, "0IM_001!", 8);  /* must not clobber CRC state */
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* Data was requested with aMC! — Table 11 requires the CRC on the
+     * D response even if a metadata query happened in between. */
+    size_t len = mock_response_len;
+    while (len > 0 && (mock_response[len - 1] == '\r' ||
+                       mock_response[len - 1] == '\n'))
+        len--;
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, len));
+}
+
+/* ── Zero-Parameter High-Volume Response Format (§5.4) ──────────────────── */
+
+void test_sensor_empty_hv_uses_seven_digits(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx;
+    sdi12_ident_t ident = {0};
+    strncpy(ident.vendor, "TEST", sizeof(ident.vendor) - 1);
+    strncpy(ident.model, "M1", sizeof(ident.model) - 1);
+    strncpy(ident.firmware_version, "1", sizeof(ident.firmware_version) - 1);
+
+    sdi12_sensor_callbacks_t cb = {0};
+    cb.send_response = mock_send_response;
+    cb.read_param    = mock_read_param;
+    sdi12_sensor_init(&ctx, '0', &ident, &cb);
+    /* no parameters registered */
+
+    sdi12_sensor_process(&ctx, "0HA!", 4);
+
+    /* §5.4: sensors without high-volume data respond a000000<CR><LF>
+     * — the 7-digit atttnnn form, not the concurrent 5-digit form. */
+    TEST_ASSERT_EQUAL_STRING("0000000\r\n", mock_response);
+}
+
+/* ── Malformed / Nonexistent Commands Must Be Ignored (§7.0) ────────────── */
+
+void test_sensor_malformed_m_ignored(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0MJUNK!", 7);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+void test_sensor_overlong_address_change_ignored(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0A1XX!", 6);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+    TEST_ASSERT_EQUAL_CHAR('0', ctx.address);
+}
+
+void test_sensor_bare_h_ignored(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    /* aH! is not an SDI-12 command — only aHA! and aHB! exist */
+    sdi12_sensor_process(&ctx, "0H!", 3);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+void test_sensor_bare_ir_ignored(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    /* Table 19 has no aIR form — continuous measurements need no
+     * identify-measurement (aIR0_001! parameter metadata still works) */
+    sdi12_sensor_process(&ctx, "0IR0!", 5);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+/* ── decimals=0 Rounds Rather Than Truncates ────────────────────────────── */
+
+static sdi12_value_t mock_read_param_int_round(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {1.0f, 0};
+    if (idx == 0) v.value = 25.7f;
+    return v;
+}
+
+void test_sensor_decimals0_rounds(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.read_param = mock_read_param_int_round;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    TEST_ASSERT_EQUAL_STRING("0+26+1+1+1+1\r\n", mock_response);
+}
+
+/* ── Identify Measurement Reports Real ttt (§6.1) ───────────────────────── */
+
+static uint16_t mock_meas_duration(uint8_t group, sdi12_meas_type_t type,
+                                   void *user_data)
+{
+    (void)group; (void)type; (void)user_data;
+    return 45;
+}
+
+void test_sensor_identify_meas_reports_ttt(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.meas_duration = mock_meas_duration;
+
+    sdi12_sensor_process(&ctx, "0IM!", 4);
+
+    /* §6.1: the aIM! response is identical to aM!'s — it must carry
+     * the sensor's real ttt, not a hardcoded 000. */
+    TEST_ASSERT_EQUAL_STRING("00455\r\n", mock_response);
 }

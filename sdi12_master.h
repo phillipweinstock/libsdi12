@@ -44,16 +44,25 @@ typedef void (*sdi12_master_send_fn)(const char *data, size_t len, void *user_da
 /**
  * Receive bytes from the SDI-12 bus.
  *
- * Contract — what ends a read: block (up to `timeout_ms`) until a
- * LF ('\n') has been received or `buflen` bytes accumulate, then return
- * the accumulated bytes. Return 0 only when nothing arrives in time.
+ * Contract: `timeout_ms` is the time to wait for the FIRST byte only —
+ * it is NOT a total-read deadline. The library passes the spec's 15 ms
+ * response window here, and at 1200 baud a character alone takes
+ * 8.33 ms, so a full response needs far more line time than 15 ms:
  *
- * Why: ASCII commands read the response in a SINGLE call, so an
- * implementation that returns whatever happens to sit in the UART FIFO
- * truncates every response — wait for the newline. Binary retrieval
- * (aDBn!) instead calls repeatedly for exact byte counts and tolerates
- * partial returns, so a read that stops at a stray 0x0A payload byte is
- * still correct — the master simply calls again for the remainder.
+ *   1. Wait up to `timeout_ms` for the first byte; if none arrives,
+ *      return 0 (timeout).
+ *   2. Once bytes are flowing, keep reading until a LF ('\n') arrives
+ *      or `buflen` bytes accumulate, using an INTER-CHARACTER timeout
+ *      (the spec allows at most 1.66 ms of marking between characters;
+ *      ~10-50 ms of line-idle is a robust end-of-response signal).
+ *   3. Return the accumulated bytes.
+ *
+ * ASCII commands read the whole response in a single call, so an
+ * implementation that stops at the first-byte deadline — or returns
+ * whatever sits in the UART FIFO — truncates every response. Binary
+ * retrieval (aDBn!) calls repeatedly for exact byte counts and
+ * tolerates partial returns, so a read that stops early at a stray
+ * 0x0A payload byte is still correct there.
  */
 typedef size_t (*sdi12_master_recv_fn)(char *buf, size_t buflen,
                                         uint32_t timeout_ms, void *user_data);

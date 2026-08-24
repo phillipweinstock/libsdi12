@@ -107,6 +107,23 @@ typedef sdi12_err_t (*sdi12_xcmd_handler_fn)(const char *xcmd,
                                               void *user_data);
 
 /**
+ * @brief Report how long a measurement would take, without starting it.
+ *
+ * Used by the identify-measurement metadata commands (aIM!, aIC!, …),
+ * whose responses must carry the same ttt the real measurement command
+ * would report (§6.1). Optional: when NULL, metadata responses report
+ * ttt = 000, which is correct only for synchronous sensors.
+ *
+ * @param group      Measurement group (0 = M/C, 1–9 = M1–M9/C1–C9).
+ * @param type       Measurement type being queried.
+ * @param user_data  User pointer from callbacks.
+ * @return Expected measurement duration in seconds (0–999).
+ */
+typedef uint16_t (*sdi12_meas_duration_fn)(uint8_t group,
+                                            sdi12_meas_type_t type,
+                                            void *user_data);
+
+/**
  * @brief Format a binary data page for high-volume binary (aHB!) responses.
  *
  * Called instead of the default ASCII formatter when the pending measurement
@@ -152,6 +169,7 @@ typedef struct {
     sdi12_load_address_fn     load_address;     /**< Load persisted address. */
     sdi12_start_measurement_fn start_measurement; /**< Async measurement (NULL = sync). */
     sdi12_service_request_fn  service_request;  /**< Send service request. */
+    sdi12_meas_duration_fn    meas_duration;    /**< ttt for aIM!-family metadata (NULL = 000). */
     sdi12_format_binary_fn    format_binary_page; /**< Binary HV data (NULL = unsupported). */
 
     void *user_data; /**< Passed to all callbacks. */

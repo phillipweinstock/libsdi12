@@ -71,11 +71,9 @@ static int format_value(char *buf, size_t buflen, sdi12_value_t val)
      * of a truncated buffer chopping its last digit. */
     uint8_t decimals = val.decimals > 6 ? 6 : val.decimals;
 
-    if (decimals == 0) {
-        return snprintf(buf, buflen, "%c%lu", sign, (unsigned long)absval);
-    } else {
-        return snprintf(buf, buflen, "%c%.*f", sign, decimals, (double)absval);
-    }
+    /* %.0f rounds like every other decimals setting; an integer cast
+     * would truncate toward zero (25.7 -> "+25" instead of "+26"). */
+    return snprintf(buf, buflen, "%c%.*f", sign, decimals, (double)absval);
 }
 
 /**
@@ -211,11 +209,16 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
 
     uint8_t n = count_group(ctx, group);
 
-    /* If sensor has no data for this group, respond with zero */
+    /* If sensor has no data for this group, respond with zero.
+     * §5.4: high-volume commands answer in the atttnnn form. */
     if (n == 0) {
         if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
                      "%c0000\r\n", ctx->address);
+        } else if (type == SDI12_MEAS_HIGHVOL_ASCII ||
+                   type == SDI12_MEAS_HIGHVOL_BINARY) {
+            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
+                     "%c000000\r\n", ctx->address);
         } else {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
                      "%c00000\r\n", ctx->address);
@@ -472,13 +475,15 @@ static sdi12_err_t handle_change_address(sdi12_sensor_ctx_t *ctx, char new_addr)
     return SDI12_OK;
 }
 
-/** Handle aH! — High-volume stub for non-supporting sensors. */
-static sdi12_err_t handle_highvol_stub(sdi12_sensor_ctx_t *ctx)
+/** ttt for identify-measurement responses (§6.1). Synchronous sensors
+ *  are always 000; async sensors report via the optional meas_duration
+ *  callback (metadata must not start a measurement). */
+static uint16_t identify_meas_ttt(sdi12_sensor_ctx_t *ctx, uint8_t group,
+                                  sdi12_meas_type_t type)
 {
-    snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-             "%c000000\r\n", ctx->address);
-    send_response(ctx);
-    return SDI12_OK;
+    if (!ctx->cb.meas_duration) return 0;
+    uint16_t ttt = ctx->cb.meas_duration(group, type, ctx->cb.user_data);
+    return ttt > 999 ? 999 : ttt;
 }
 
 /**
@@ -530,8 +535,10 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
                 group = (uint8_t)(*after_mc - '0');
             }
         } else if (subcmd == 'R') {
-            if (cmd[3] >= '0' && cmd[3] <= '9') {
-                group = (uint8_t)(cmd[3] - '0');
+            /* aIR0_nnn! or aIRC0_nnn! — group digit after optional 'C' */
+            size_t gp = (cmd[3] == 'C') ? 4 : 3;
+            if (cmd + gp < underscore && cmd[gp] >= '0' && cmd[gp] <= '9') {
+                group = (uint8_t)(cmd[gp] - '0');
             }
         }
 
@@ -539,10 +546,19 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
         uint8_t indices[SDI12_MAX_PARAMS];
         uint8_t n = collect_group_indices(ctx, group, indices, SDI12_MAX_PARAMS);
 
+        /* Table 20: the response carries a CRC only when the underlying
+         * measurement command returns one — the MC/CC/RC families and
+         * always for HA/HB. Note the check is on the character AFTER
+         * the family letter: aIC_nnn! has no CRC, aICC_nnn! does.
+         * The pending-data CRC state is deliberately left alone —
+         * metadata queries must not strip the CRC from a retained
+         * aMC!/aCC! data set (§4.4.5). */
+        bool crc = (subcmd == 'H') ||
+                   ((subcmd == 'M' || subcmd == 'C' || subcmd == 'R') &&
+                    cmd[3] == 'C');
+
         if (param_num >= 1 && param_num <= n) {
             uint8_t idx = indices[param_num - 1];
-            bool crc = (memchr(cmd + 2, 'C', (size_t)(underscore - cmd - 2)) != NULL);
-            ctx->crc_requested = crc;
 
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
                      "%c,%s,%s;",
@@ -560,7 +576,6 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
             }
         } else {
             /* Invalid parameter number — respond with just address */
-            bool crc = (memchr(cmd + 2, 'C', (size_t)(underscore - cmd - 2)) != NULL);
             if (crc) {
                 snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c", ctx->address);
                 sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
@@ -572,77 +587,72 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
         return SDI12_OK;
     }
 
-    /* Non-parameter metadata — return measurement capability summary.
-     * CRC command variants (aIMC!, aICC!, aIHAC!, aIRC0!, …) get a CRC
-     * appended to the response, matching the underlying command. */
+    /* Non-parameter metadata — return the measurement capability
+     * summary. §6.1 Table 19: every response is plain atttn/atttnn/
+     * atttnnn<CR><LF> — no CRC, even for the aIMC!/aICC! forms — and
+     * must carry the same ttt the real command would report. There is
+     * no aIR form (continuous measurements need no start command). */
     uint8_t group = 0;
-    bool resp_crc = false;
 
     switch (subcmd) {
     case 'M': {
         /* aIM!, aIM1!–aIM9!, aIMC!, aIMC1!–aIMC9! */
-        resp_crc = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = resp_crc ? 4 : 3;
-        if (digit_pos < len && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
-            group = (uint8_t)(cmd[digit_pos] - '0');
-        }
+        bool crc_form = (len > 3 && cmd[3] == 'C');
+        size_t digit_pos = crc_form ? 4 : 3;
+        bool has_digit = (digit_pos < len &&
+                          cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9');
+        if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
+        if (len != digit_pos + (has_digit ? 1u : 0u))
+            return SDI12_ERR_INVALID_COMMAND;
+
         uint8_t n = count_group(ctx, group);
+        uint16_t ttt = identify_meas_ttt(ctx, group, SDI12_MEAS_STANDARD);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%u", ctx->address, n > 9 ? 9 : n);
+                 "%c%03u%u", ctx->address, ttt, n > 9 ? 9 : n);
     } break;
 
     case 'C': {
         /* aIC!, aIC1!–aIC9!, aICC!, aICC1!–aICC9! */
-        resp_crc = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = resp_crc ? 4 : 3;
-        if (digit_pos < len && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
-            group = (uint8_t)(cmd[digit_pos] - '0');
-        }
+        bool crc_form = (len > 3 && cmd[3] == 'C');
+        size_t digit_pos = crc_form ? 4 : 3;
+        bool has_digit = (digit_pos < len &&
+                          cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9');
+        if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
+        if (len != digit_pos + (has_digit ? 1u : 0u))
+            return SDI12_ERR_INVALID_COMMAND;
+
         uint8_t n = count_group(ctx, group);
+        uint16_t ttt = identify_meas_ttt(ctx, group, SDI12_MEAS_CONCURRENT);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%02u", ctx->address, n > 99 ? 99 : n);
+                 "%c%03u%02u", ctx->address, ttt, n > 99 ? 99 : n);
     } break;
 
     case 'V': {
+        if (len != 3) return SDI12_ERR_INVALID_COMMAND;
         uint8_t n = count_group(ctx, 0);
+        uint16_t ttt = identify_meas_ttt(ctx, 0, SDI12_MEAS_VERIFICATION);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%u", ctx->address, n > 9 ? 9 : n);
+                 "%c%03u%u", ctx->address, ttt, n > 9 ? 9 : n);
     } break;
 
     case 'H': {
-        /* aIHA!, aIHB!, aIHAC!, aIHBC! */
-        if (len > 3 && (cmd[3] == 'A' || cmd[3] == 'B')) {
-            resp_crc = (len > 4 && cmd[4] == 'C');
-            uint8_t n = count_group(ctx, 0);
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000%03u", ctx->address, (unsigned)n);
-        } else {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000000", ctx->address);
-        }
-    } break;
-
-    case 'R': {
-        /* aIR0!–aIR9!, aIRC0!–aIRC9! — continuous capability */
-        resp_crc = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = resp_crc ? 4 : 3;
-        if (digit_pos < len && cmd[digit_pos] >= '0' && cmd[digit_pos] <= '9') {
-            group = (uint8_t)(cmd[digit_pos] - '0');
-        }
-        uint8_t n = count_group(ctx, group);
+        /* aIHA!, aIHB! only */
+        if (len != 4 || (cmd[3] != 'A' && cmd[3] != 'B'))
+            return SDI12_ERR_INVALID_COMMAND;
+        sdi12_meas_type_t t = (cmd[3] == 'A') ? SDI12_MEAS_HIGHVOL_ASCII
+                                              : SDI12_MEAS_HIGHVOL_BINARY;
+        uint8_t n = count_group(ctx, 0);
+        uint16_t ttt = identify_meas_ttt(ctx, 0, t);
         snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c000%02u", ctx->address, n > 99 ? 99 : n);
+                 "%c%03u%03u", ctx->address, ttt, (unsigned)n);
     } break;
 
     default:
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c0000", ctx->address);
-        break;
+        /* Includes aIR…! — not in Table 19. Stay silent. */
+        return SDI12_ERR_INVALID_COMMAND;
     }
 
-    if (resp_crc) {
-        sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
-    } else {
+    {
         size_t slen = strlen(ctx->resp_buf);
         if (slen + 2 < sizeof(ctx->resp_buf)) {
             ctx->resp_buf[slen]     = '\r';
@@ -825,28 +835,33 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
     }
 
     case 'M': {
-        /* aM!, aMC!, aM1!–aM9!, aMC1!–aMC9! */
+        /* aM!, aMC!, aM1!–aM9!, aMC1!–aMC9! — nothing else */
         bool crc = (cmdlen > 2 && cmd[2] == 'C');
         uint8_t group = 0;
         size_t digit_pos = crc ? 3 : 2;
+        bool has_digit = (digit_pos < cmdlen &&
+                          cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9');
 
-        if (digit_pos < cmdlen && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
-            group = (uint8_t)(cmd[digit_pos] - '0');
-        }
+        if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
+        /* Trailing characters make the command invalid — stay silent */
+        if (cmdlen != digit_pos + (has_digit ? 1u : 0u))
+            return SDI12_ERR_INVALID_COMMAND;
 
         /* Invalidate any prior concurrent measurement data */
         return handle_measurement(ctx, group, crc, SDI12_MEAS_STANDARD);
     }
 
     case 'C': {
-        /* aC!, aCC!, aC1!–aC9!, aCC1!–aCC9! */
+        /* aC!, aCC!, aC1!–aC9!, aCC1!–aCC9! — nothing else */
         bool crc = (cmdlen > 2 && cmd[2] == 'C');
         uint8_t group = 0;
         size_t digit_pos = crc ? 3 : 2;
+        bool has_digit = (digit_pos < cmdlen &&
+                          cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9');
 
-        if (digit_pos < cmdlen && cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9') {
-            group = (uint8_t)(cmd[digit_pos] - '0');
-        }
+        if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
+        if (cmdlen != digit_pos + (has_digit ? 1u : 0u))
+            return SDI12_ERR_INVALID_COMMAND;
 
         return handle_measurement(ctx, group, crc, SDI12_MEAS_CONCURRENT);
     }
@@ -898,28 +913,22 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
     }
 
     case 'A': {
-        /* aAb! — Change address */
-        if (cmdlen >= 3 && isprint((unsigned char)cmd[2])) {
+        /* aAb! — Change address. Exactly three characters. */
+        if (cmdlen == 3 && isprint((unsigned char)cmd[2])) {
             return handle_change_address(ctx, cmd[2]);
         }
-        return SDI12_ERR_INVALID_ADDRESS;
+        return SDI12_ERR_INVALID_COMMAND;
     }
 
     case 'H': {
-        /* aH!, aHA!, aHAC!, aHB!, aHBC! */
-        if (cmdlen == 2) {
-            return handle_highvol_stub(ctx);
-        }
-        if (cmdlen >= 3) {
-            if (cmd[2] == 'A') {
-                bool crc = (cmdlen > 3 && cmd[3] == 'C');
-                return handle_measurement(ctx, 0, crc, SDI12_MEAS_HIGHVOL_ASCII);
-            } else if (cmd[2] == 'B') {
-                bool crc = (cmdlen > 3 && cmd[3] == 'C');
-                return handle_measurement(ctx, 0, crc, SDI12_MEAS_HIGHVOL_BINARY);
-            }
-        }
-        return handle_highvol_stub(ctx);
+        /* Only aHA! and aHB! exist (§5.1/§5.2). The CRC on HV ASCII
+         * data pages is mandatory (§5.1), so aHA! requests it
+         * unconditionally; aHB! packets carry a binary CRC by framing. */
+        if (cmdlen == 3 && cmd[2] == 'A')
+            return handle_measurement(ctx, 0, true, SDI12_MEAS_HIGHVOL_ASCII);
+        if (cmdlen == 3 && cmd[2] == 'B')
+            return handle_measurement(ctx, 0, false, SDI12_MEAS_HIGHVOL_BINARY);
+        return SDI12_ERR_INVALID_COMMAND;
     }
 
     case 'X': {
