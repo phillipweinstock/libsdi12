@@ -43,8 +43,17 @@ typedef void (*sdi12_master_send_fn)(const char *data, size_t len, void *user_da
 
 /**
  * Receive bytes from the SDI-12 bus.
- * Implementation should block/poll for up to `timeout_ms` milliseconds.
- * Returns number of bytes read into `buf`, 0 on timeout.
+ *
+ * Contract — what ends a read: block (up to `timeout_ms`) until a
+ * LF ('\n') has been received or `buflen` bytes accumulate, then return
+ * the accumulated bytes. Return 0 only when nothing arrives in time.
+ *
+ * Why: ASCII commands read the response in a SINGLE call, so an
+ * implementation that returns whatever happens to sit in the UART FIFO
+ * truncates every response — wait for the newline. Binary retrieval
+ * (aDBn!) instead calls repeatedly for exact byte counts and tolerates
+ * partial returns, so a read that stops at a stray 0x0A payload byte is
+ * still correct — the master simply calls again for the remainder.
  */
 typedef size_t (*sdi12_master_recv_fn)(char *buf, size_t buflen,
                                         uint32_t timeout_ms, void *user_data);

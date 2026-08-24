@@ -246,7 +246,10 @@ typedef struct {
  */
 typedef struct {
     float value;     /**< The measurement value. */
-    uint8_t decimals; /**< Number of decimal places to format (0–7). */
+    uint8_t decimals; /**< Decimal places to format, 0–6. Higher values
+                           clamp to 6: the spec's 9-char value cap
+                           (§4.4.8 Table 11) leaves room for at most
+                           sign + digit + point + 6 decimals. */
 } sdi12_value_t;
 
 /**

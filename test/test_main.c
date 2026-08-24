@@ -101,6 +101,7 @@ extern void test_sensor_overlong_value_truncated_safely(void);
 extern void test_sensor_measurement_done_null_values(void);
 extern void test_sensor_nonfinite_values_emit_valid_sentinels(void);
 extern void test_sensor_huge_values_clamped_to_spec_max(void);
+extern void test_sensor_decimals_clamped_to_fit_nine_chars(void);
 
 /* test_master.c */
 extern void test_parse_meas_m_basic(void);
@@ -131,6 +132,9 @@ extern void test_master_identify_wrong_address_rejected(void);
 extern void test_master_hv_binary_roundtrip_ok(void);
 extern void test_master_hv_binary_small_buffer_reports_truncation(void);
 extern void test_master_hv_binary_wrong_address_rejected(void);
+extern void test_master_get_data_rejects_page_over_9(void);
+extern void test_master_hv_binary_rejects_page_over_999(void);
+extern void test_master_hv_data_rejects_page_over_999(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -274,6 +278,9 @@ int main(void)
     RUN_TEST(test_master_hv_binary_roundtrip_ok);
     RUN_TEST(test_master_hv_binary_small_buffer_reports_truncation);
     RUN_TEST(test_master_hv_binary_wrong_address_rejected);
+    RUN_TEST(test_master_get_data_rejects_page_over_9);
+    RUN_TEST(test_master_hv_binary_rejects_page_over_999);
+    RUN_TEST(test_master_hv_data_rejects_page_over_999);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);
@@ -304,6 +311,7 @@ int main(void)
 
     RUN_TEST(test_sensor_nonfinite_values_emit_valid_sentinels);
     RUN_TEST(test_sensor_huge_values_clamped_to_spec_max);
+    RUN_TEST(test_sensor_decimals_clamped_to_fit_nine_chars);
 
     /* Runs last: a regression here previously segfaulted */
     RUN_TEST(test_sensor_measurement_done_null_values);

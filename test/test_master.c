@@ -367,6 +367,43 @@ void test_master_identify_wrong_address_rejected(void)
     TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
 }
 
+/* ── D-Command Page Range ───────────────────────────────────────────────── */
+
+void test_master_get_data_rejects_page_over_9(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0+1.23\r\n");
+
+    sdi12_data_response_t d;
+    /* aD0!..aD9! is the whole command family (§4.4.8 Table 11) —
+     * "0D10!" is not a valid command and must never reach the bus. */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+                      sdi12_master_get_data(&m, '0', 10, false, &d));
+}
+
+void test_master_hv_binary_rejects_page_over_999(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    sdi12_bintype_t type;
+    uint8_t out[8];
+    size_t out_len = sizeof(out);
+    /* aDB0!..aDB999! (§5.2) — page 1000 is invalid */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+                      sdi12_master_get_hv_binary_data(&m, '0', 1000, &type,
+                                                      out, &out_len));
+}
+
+void test_master_hv_data_rejects_page_over_999(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    char raw[64];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+                      sdi12_master_get_hv_data(&m, '0', 1000, raw, &raw_len));
+}
+
 /* ── High-Volume Binary Retrieval (aDBn!) ───────────────────────────────── */
 
 void test_master_hv_binary_roundtrip_ok(void)

@@ -333,6 +333,9 @@ sdi12_err_t sdi12_master_get_data(sdi12_master_ctx_t *ctx,
 {
     if (!ctx || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+    /* aD0!..aD9! is the whole family (§4.4.8 Table 11); high-volume
+     * pages 10..999 go through sdi12_master_get_hv_data() instead. */
+    if (page > 9) return SDI12_ERR_INVALID_COMMAND;
 
     memset(resp, 0, sizeof(*resp));
 
@@ -711,6 +714,7 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
 {
     if (!ctx || !raw_buf || !raw_len) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+    if (page >= SDI12_MAX_HV_DATA_PAGES) return SDI12_ERR_INVALID_COMMAND;
 
     char cmd[12];
     snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
@@ -744,6 +748,7 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     if (!ctx || !out_type || !out_payload || !out_len)
         return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+    if (page >= SDI12_MAX_HV_DATA_PAGES) return SDI12_ERR_INVALID_COMMAND;
 
     /* Send aDBn! command */
     char cmd[16];

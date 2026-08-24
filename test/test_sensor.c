@@ -996,3 +996,29 @@ void test_sensor_huge_values_clamped_to_spec_max(void)
      * 9999999 must clamp, not overflow through an undefined cast. */
     TEST_ASSERT_EQUAL_STRING("0+9999999-9999999+1+1+1\r\n", mock_response);
 }
+
+static sdi12_value_t mock_read_param_7dec(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {1.0f, 0};
+    if (idx == 0) { v.value = 0.9999999f; v.decimals = 7; }
+    return v;
+}
+
+void test_sensor_decimals_clamped_to_fit_nine_chars(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.read_param = mock_read_param_7dec;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* decimals=7 cannot fit the 9-char value cap (§4.4.8 Table 11):
+     * sign + digit + point + 7 decimals = 10 chars. The library must
+     * clamp to 6 decimals and ROUND — not chop a digit off the end of
+     * an over-long string. 0.9999999 rounds to 1.000000; a chop would
+     * emit +0.999999. */
+    TEST_ASSERT_EQUAL_STRING("0+1.000000+1+1+1+1\r\n", mock_response);
+}

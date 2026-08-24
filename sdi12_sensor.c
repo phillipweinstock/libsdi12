@@ -66,10 +66,15 @@ static int format_value(char *buf, size_t buflen, sdi12_value_t val)
     char sign = v >= 0.0f ? '+' : '-';
     float absval = fabsf(v);   /* -0.0f must print "+0.00", not "+-0.00" */
 
-    if (val.decimals == 0) {
+    /* 7 decimals can't fit the 9-char value cap (sign + digit + point
+     * + 7 = 10 chars): clamp to 6 so printf rounds the value instead
+     * of a truncated buffer chopping its last digit. */
+    uint8_t decimals = val.decimals > 6 ? 6 : val.decimals;
+
+    if (decimals == 0) {
         return snprintf(buf, buflen, "%c%lu", sign, (unsigned long)absval);
     } else {
-        return snprintf(buf, buflen, "%c%.*f", sign, val.decimals, (double)absval);
+        return snprintf(buf, buflen, "%c%.*f", sign, decimals, (double)absval);
     }
 }
 
