@@ -805,16 +805,22 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
         if (crc != received_crc) return SDI12_ERR_CRC_MISMATCH;
     }
 
-    /* Copy payload to output */
+    /* A CRC-valid packet from a different sensor is still the wrong
+     * answer — the ASCII paths reject these, the binary path must too. */
+    if (hdr[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
+
+    /* Copy payload to output — report only what was actually written,
+     * and flag truncation so the caller never reads past its buffer. */
     size_t copy_len = pkt_size;
-    if (copy_len > *out_len) copy_len = *out_len;
+    bool truncated = copy_len > *out_len;
+    if (truncated) copy_len = *out_len;
     if (copy_len > 0) memcpy(out_payload, tail, copy_len);
-    *out_len = pkt_size;
+    *out_len = copy_len;
 
     /* Store total packet size for timing layer access */
     ctx->resp_len = 3 + 1 + tail_len;
 
-    return SDI12_OK;
+    return truncated ? SDI12_ERR_BUFFER_OVERFLOW : SDI12_OK;
 }
 
 size_t sdi12_bintype_size(sdi12_bintype_t type)

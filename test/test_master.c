@@ -241,6 +241,7 @@ void test_parse_values_null_args(void)
 static char   m_last_cmd[64];
 static char   m_reply[128];
 static size_t m_reply_len;
+static size_t m_reply_pos;
 
 static void m_send(const char *data, size_t len, void *user_data)
 {
@@ -250,12 +251,16 @@ static void m_send(const char *data, size_t len, void *user_data)
     m_last_cmd[len] = '\0';
 }
 
+/* Streaming reply: successive recv calls consume from m_reply so the
+ * fixed-count reads of the binary path (header, type, tail) each get
+ * their slice. Exhausted reply returns 0 (timeout). */
 static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data)
 {
     (void)timeout_ms; (void)user_data;
-    size_t n = m_reply_len < max ? m_reply_len : max;
-    memcpy(buf, m_reply, n);
-    m_reply_len = 0;  /* one-shot reply */
+    size_t remain = m_reply_len - m_reply_pos;
+    size_t n = remain < max ? remain : max;
+    memcpy(buf, m_reply + m_reply_pos, n);
+    m_reply_pos += n;
     return n;
 }
 
@@ -281,6 +286,29 @@ static void set_reply(const char *s)
 {
     m_reply_len = strlen(s);
     memcpy(m_reply, s, m_reply_len);
+    m_reply_pos = 0;
+}
+
+static void set_reply_bin(const void *data, size_t len)
+{
+    memcpy(m_reply, data, len);
+    m_reply_len = len;
+    m_reply_pos = 0;
+}
+
+/** Build a §5.2 Table 14 packet: addr + size(2 LE) + type + payload + CRC(2 LE). */
+static size_t make_bin_packet(char *out, char addr, uint8_t type,
+                              const void *payload, uint16_t n)
+{
+    out[0] = addr;
+    out[1] = (char)(n & 0xFF);
+    out[2] = (char)((n >> 8) & 0xFF);
+    out[3] = (char)type;
+    memcpy(out + 4, payload, n);
+    uint16_t crc = sdi12_crc16(out, 4u + n);
+    out[4 + n] = (char)(crc & 0xFF);
+    out[5 + n] = (char)((crc >> 8) & 0xFF);
+    return 6u + n;
 }
 
 void test_master_get_data_crc_verified_ok(void)
@@ -337,4 +365,73 @@ void test_master_identify_wrong_address_rejected(void)
     sdi12_err_t err = sdi12_master_identify(&m, '0', &ident);
 
     TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
+}
+
+/* ── High-Volume Binary Retrieval (aDBn!) ───────────────────────────────── */
+
+void test_master_hv_binary_roundtrip_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    float vals[2] = { 1.5f, -2.25f };
+    char pkt[64];
+    size_t pkt_len = make_bin_packet(pkt, '0', SDI12_BINTYPE_FLOAT32,
+                                     vals, sizeof(vals));
+    set_reply_bin(pkt, pkt_len);
+
+    sdi12_bintype_t type;
+    float out[4];
+    size_t out_len = sizeof(out);
+    sdi12_err_t err = sdi12_master_get_hv_binary_data(
+        &m, '0', 0, &type, out, &out_len);
+
+    TEST_ASSERT_EQUAL(SDI12_OK, err);
+    TEST_ASSERT_EQUAL(SDI12_BINTYPE_FLOAT32, type);
+    TEST_ASSERT_EQUAL(sizeof(vals), out_len);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.5f, out[0]);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, -2.25f, out[1]);
+}
+
+void test_master_hv_binary_small_buffer_reports_truncation(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    uint8_t payload[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    char pkt[32];
+    size_t pkt_len = make_bin_packet(pkt, '0', SDI12_BINTYPE_UINT8,
+                                     payload, sizeof(payload));
+    set_reply_bin(pkt, pkt_len);
+
+    sdi12_bintype_t type;
+    uint8_t small[4];
+    size_t out_len = sizeof(small);
+    sdi12_err_t err = sdi12_master_get_hv_binary_data(
+        &m, '0', 0, &type, small, &out_len);
+
+    /* Truncation must be reported, and out_len must never exceed what
+     * was actually written into the caller's buffer. */
+    TEST_ASSERT_EQUAL(SDI12_ERR_BUFFER_OVERFLOW, err);
+    TEST_ASSERT_EQUAL(sizeof(small), out_len);
+    TEST_ASSERT_EQUAL_INT(1, small[0]);
+    TEST_ASSERT_EQUAL_INT(4, small[3]);
+}
+
+void test_master_hv_binary_wrong_address_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    /* CRC-valid packet, but from sensor '1' when we asked '0' */
+    uint8_t payload[4] = { 9, 9, 9, 9 };
+    char pkt[32];
+    size_t pkt_len = make_bin_packet(pkt, '1', SDI12_BINTYPE_UINT8,
+                                     payload, sizeof(payload));
+    set_reply_bin(pkt, pkt_len);
+
+    sdi12_bintype_t type;
+    uint8_t out[16];
+    size_t out_len = sizeof(out);
+    sdi12_err_t err = sdi12_master_get_hv_binary_data(
+        &m, '0', 0, &type, out, &out_len);
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS, err);
 }

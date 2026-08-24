@@ -125,9 +125,18 @@ typedef sdi12_err_t (*sdi12_xcmd_handler_fn)(const char *xcmd,
  * @brief Format a binary data page for high-volume binary (aHB!) responses.
  *
  * Called instead of the default ASCII formatter when the pending measurement
- * type is SDI12_MEAS_HIGHVOL_BINARY. The implementation writes raw bytes into
- * buf (manufacturer-defined encoding). The library prepends the address and
- * appends CRLF automatically.
+ * type is SDI12_MEAS_HIGHVOL_BINARY.
+ *
+ * The implementation must write, starting at buf[1] (buf[0] already holds
+ * the address):
+ *
+ *   buf[1]   the data type byte — one of sdi12_bintype_t (§5.2.1 Table 16)
+ *   buf[2..] the raw payload bytes in that type's little-endian encoding
+ *
+ * and return the total number of bytes written from buf[1] onward, i.e.
+ * 1 (type byte) + payload size. For the aDBn! response the library frames
+ * this as a §5.2 Table 14 packet: it inserts the 2-byte packet size,
+ * carries the type byte through, and appends the binary CRC.
  *
  * @param page       Requested page number (0–999).
  * @param values     Array of measured values from the data cache.
@@ -135,7 +144,7 @@ typedef sdi12_err_t (*sdi12_xcmd_handler_fn)(const char *xcmd,
  * @param buf        Output buffer (address already at buf[0]).
  * @param buflen     Total size of the output buffer.
  * @param user_data  User pointer from callbacks.
- * @return Number of payload bytes written starting at buf[1] (excluding address).
+ * @return Bytes written starting at buf[1]: 1 + payload size.
  *         Return 0 if the page is empty or past the last page.
  */
 typedef size_t (*sdi12_format_binary_fn)(uint16_t page,

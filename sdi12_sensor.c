@@ -11,6 +11,7 @@
  */
 #include "sdi12_sensor.h"
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -44,11 +45,26 @@ static uint8_t collect_group_indices(const sdi12_sensor_ctx_t *ctx,
     return n;
 }
 
+/** Largest magnitude a data value can carry: 7 digits per §4.4.8 Table 11. */
+#define SDI12_VALUE_LIMIT 9999999.0f
+
 /** Format a single value with mandatory sign prefix per SDI-12 spec. */
 static int format_value(char *buf, size_t buflen, sdi12_value_t val)
 {
-    char sign = val.value >= 0.0f ? '+' : '-';
-    float absval = val.value >= 0.0f ? val.value : -val.value;
+    float v = val.value;
+
+    /* Non-finite input (dead ADC, failed conversion) or a magnitude
+     * beyond the 7-digit cap: saturate to the ±9999999 sentinel instead
+     * of letting printf emit "inf"/"nan" or the integer cast below hit
+     * undefined behavior. Integer form regardless of requested decimals
+     * — a fractional part at this magnitude would exceed the 9-char cap.
+     * The negated comparison is deliberate: it is also true for NaN. */
+    if (!(fabsf(v) <= SDI12_VALUE_LIMIT)) {
+        return snprintf(buf, buflen, "%c9999999", v < 0.0f ? '-' : '+');
+    }
+
+    char sign = v >= 0.0f ? '+' : '-';
+    float absval = fabsf(v);   /* -0.0f must print "+0.00", not "+-0.00" */
 
     if (val.decimals == 0) {
         return snprintf(buf, buflen, "%c%lu", sign, (unsigned long)absval);
@@ -352,7 +368,11 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
         return SDI12_OK;
     }
 
-    /* High-volume binary: delegate to user callback if available */
+    /* High-volume binary: delegate to user callback if available.
+     * The callback writes type byte + payload at buf[1] (see
+     * sdi12_format_binary_fn); this path transmits that block verbatim
+     * after the address — same convention as the aDBn! path, minus the
+     * Table 14 size/CRC framing. */
     if (ctx->pending_meas_type == SDI12_MEAS_HIGHVOL_BINARY &&
         ctx->cb.format_binary_page != NULL) {
         ctx->resp_buf[0] = ctx->address;

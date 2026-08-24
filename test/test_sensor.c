@@ -935,3 +935,64 @@ void test_sensor_measurement_done_null_values(void)
     sdi12_err_t err = sdi12_sensor_measurement_done(&ctx, NULL, 3);
     TEST_ASSERT_NOT_EQUAL(SDI12_OK, err);
 }
+
+/* ── Non-Finite and Out-of-Range Value Formatting ───────────────────────── */
+
+/** What a dead ADC or failed conversion hands the library. */
+static sdi12_value_t mock_read_param_nonfinite(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {0.0f, 0};
+    switch (idx) {
+    case 0: v.value = nanf("");   v.decimals = 0; break;
+    case 1: v.value = INFINITY;   v.decimals = 2; break;
+    case 2: v.value = -INFINITY;  v.decimals = 1; break;
+    case 3: v.value = -0.0f;      v.decimals = 2; break;
+    default: break;  /* 0.0, decimals 0 */
+    }
+    return v;
+}
+
+void test_sensor_nonfinite_values_emit_valid_sentinels(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.read_param = mock_read_param_nonfinite;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* Non-finite inputs must saturate to the spec-max sentinel, never
+     * leak printf's "inf"/"nan" text or a double sign onto the bus.
+     * -0.0 is finite and must format as an ordinary positive zero. */
+    TEST_ASSERT_EQUAL_STRING("0+9999999+9999999-9999999+0.00+0\r\n",
+                             mock_response);
+}
+
+static sdi12_value_t mock_read_param_huge(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {1.0f, 0};
+    switch (idx) {
+    case 0: v.value = 1e30f;  break;   /* undefined cast to unsigned long */
+    case 1: v.value = -1e30f; break;
+    default: break;
+    }
+    return v;
+}
+
+void test_sensor_huge_values_clamped_to_spec_max(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.read_param = mock_read_param_huge;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* §4.4.8 Table 11 caps a value at 7 digits — magnitudes beyond
+     * 9999999 must clamp, not overflow through an undefined cast. */
+    TEST_ASSERT_EQUAL_STRING("0+9999999-9999999+1+1+1\r\n", mock_response);
+}
