@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(libsdi12
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "Portable SDI-12 v1.4 protocol library — sensor and master"
     HOMEPAGE_URL "https://github.com/phillipweinstock/libsdi12"
     LANGUAGES C

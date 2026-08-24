@@ -29,7 +29,6 @@
 /* ── Forward declarations ──────────────────────────────────────────── */
 
 static void     cb_send_response(const char *data, size_t len, void *ud);
-static void     cb_set_direction(sdi12_dir_t dir, void *ud);
 static sdi12_value_t cb_read_param(uint8_t idx, void *ud);
 static void     cb_save_address(char addr, void *ud);
 static char     cb_load_address(void *ud);
@@ -53,14 +52,6 @@ static void cb_send_response(const char *data, size_t len, void *ud) {
     SDI12_UART.write(data, len);
     SDI12_UART.flush();                 /* wait for all bytes */
     digitalWrite(DIR_PIN, LOW);         /* back to RX */
-}
-
-/**
- * Switch the RS-485 / level-shifter direction.
- */
-static void cb_set_direction(sdi12_dir_t dir, void *ud) {
-    (void)ud;
-    digitalWrite(DIR_PIN, dir == SDI12_DIR_TX ? HIGH : LOW);
 }
 
 /**
@@ -147,7 +138,6 @@ void setup() {
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = cb_send_response;
-    cb.set_direction = cb_set_direction;
     cb.read_param    = cb_read_param;
     cb.save_address  = cb_save_address;     /* optional: persist address */
     cb.load_address  = cb_load_address;     /* optional: restore on boot */

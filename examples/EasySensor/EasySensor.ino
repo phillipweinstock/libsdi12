@@ -20,11 +20,6 @@ void my_send(const char *data, size_t len, void *ud) {
     digitalWrite(2, LOW);           /* back to RX */
 }
 
-void my_dir(sdi12_dir_t dir, void *ud) {
-    (void)ud;
-    digitalWrite(2, dir == SDI12_DIR_TX ? HIGH : LOW);
-}
-
 sdi12_value_t my_read(uint8_t idx, void *ud) {
     (void)ud;
     sdi12_value_t v = {0.0f, 0};
@@ -40,7 +35,7 @@ sdi12_value_t my_read(uint8_t idx, void *ud) {
 
 SDI12_SENSOR_DEFINE(weather, '0',
     "WEATHER ", "WX3000", "110", "SN-00042     ",
-    my_send, my_dir, my_read);
+    my_send, my_read);
 
 void setup() {
     Serial.begin(115200);
