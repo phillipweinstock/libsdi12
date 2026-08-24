@@ -76,8 +76,9 @@ static int format_value(char *buf, size_t buflen, sdi12_value_t val)
 /**
  * Format values into D-response pages.
  *
- * Populates resp_buf with the response for the requested page.
- * Returns SDI12_OK if values were written, SDI12_ERR_NO_DATA if page empty.
+ * Populates resp_buf with the response for the requested page. An empty
+ * page yields the bare-address response, which is how the wire protocol
+ * signals "no data" (§4.4.8).
  */
 static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
                                      uint8_t page,

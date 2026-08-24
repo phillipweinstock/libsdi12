@@ -178,8 +178,7 @@ typedef enum {
 
 /** Sensor state machine states (for sensor-side implementation). */
 typedef enum {
-    SDI12_STATE_STANDBY = 0,   /**< Low-power standby. */
-    SDI12_STATE_READY,         /**< Awake, listening for commands. */
+    SDI12_STATE_READY = 0,     /**< Awake, listening for commands. */
     SDI12_STATE_MEASURING,     /**< Standard measurement in progress (M/V). */
     SDI12_STATE_MEASURING_C,   /**< Concurrent measurement in progress. */
     SDI12_STATE_DATA_READY     /**< Measurement complete, data available. */
@@ -192,13 +191,11 @@ typedef enum {
     SDI12_ERR_INVALID_COMMAND,
     SDI12_ERR_BUFFER_OVERFLOW,
     SDI12_ERR_NOT_ADDRESSED,
-    SDI12_ERR_NO_DATA,
     SDI12_ERR_PARAM_LIMIT,
     SDI12_ERR_CALLBACK_MISSING,
     SDI12_ERR_TIMEOUT,
     SDI12_ERR_CRC_MISMATCH,
-    SDI12_ERR_PARSE_FAILED,
-    SDI12_ERR_ABORTED
+    SDI12_ERR_PARSE_FAILED
 } sdi12_err_t;
 
 /** Binary data types for high-volume binary (aHB!) responses. */

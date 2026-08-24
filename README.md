@@ -133,9 +133,11 @@ Include `sdi12_easy.h` and get going in **4 lines**:
 ```c
 #include "sdi12_easy.h"
 
-/* Write your 3 hardware functions once */
-void my_send(const char *d, size_t n, void *u) { uart_write(d, n); }
-void my_dir(sdi12_dir_t dir, void *u)          { gpio_set(DIR, dir); }
+/* Write your 2 hardware functions once.
+ * my_send owns TX/RX switching: TX, write, flush, back to RX. */
+void my_send(const char *d, size_t n, void *u) {
+    gpio_set(DIR, TX); uart_write(d, n); uart_flush(); gpio_set(DIR, RX);
+}
 sdi12_value_t my_read(uint8_t i, void *u) {
     sdi12_value_t v = {0};
     if (i == 0) { v.value = read_temp(); v.decimals = 2; }
@@ -144,7 +146,7 @@ sdi12_value_t my_read(uint8_t i, void *u) {
 
 /* 1. Define */
 SDI12_SENSOR_DEFINE(my_sensor, '0', "MYCO    ", "TEMP  ", "100", "SN001   ",
-                    my_send, my_dir, my_read);
+                    my_send, my_read);
 
 void setup(void) {
     SDI12_SENSOR_SETUP(my_sensor);                  /* 2. Init  */
@@ -209,17 +211,13 @@ Implement an SDI-12 sensor that responds to commands from a data recorder.
 #include <sdi12.h>
 #include <sdi12_sensor.h>
 
-/* Required: send response bytes on the SDI-12 bus */
+/* Required: send response bytes on the SDI-12 bus.
+ * Owns TX/RX switching: switch to TX, write, flush, switch back to RX. */
 void my_send(const char *data, size_t len, void *user_data) {
     uart_set_direction(TX);
     uart_write(data, len);
     uart_flush();
     uart_set_direction(RX);
-}
-
-/* Required: set bus direction */
-void my_dir(sdi12_dir_t dir, void *user_data) {
-    gpio_write(DIR_PIN, dir == SDI12_DIR_TX ? HIGH : LOW);
 }
 
 /* Required: read a measurement parameter by index */
@@ -244,7 +242,6 @@ memcpy(ident.firmware_version, "100", 3);
 
 sdi12_sensor_callbacks_t cb = {0};
 cb.send_response = my_send;
-cb.set_direction = my_dir;
 cb.read_param    = my_read_param;
 
 sdi12_sensor_init(&ctx, '0', &ident, &cb);
@@ -278,7 +275,6 @@ sdi12_sensor_break(&ctx);
 | `start_measurement` | Begin an async measurement; return `ttt` seconds (NULL = synchronous) |
 | `service_request` | Custom service-request transmit (NULL = uses `send_response`) |
 | `format_binary_page` | Manufacturer-defined binary encoding for `aHB!` / `aDBn!` pages |
-| `on_reset` | Device reset hook |
 
 ### Extended Commands
 
@@ -455,13 +451,11 @@ All API functions return `sdi12_err_t`:
 | `SDI12_ERR_INVALID_COMMAND` | Malformed or unrecognised command |
 | `SDI12_ERR_BUFFER_OVERFLOW` | Response exceeds buffer capacity |
 | `SDI12_ERR_NOT_ADDRESSED` | Command addressed to a different sensor |
-| `SDI12_ERR_NO_DATA` | No measurement data available |
 | `SDI12_ERR_PARAM_LIMIT` | Parameter / extended-command table full |
 | `SDI12_ERR_CALLBACK_MISSING` | Required callback not provided |
 | `SDI12_ERR_TIMEOUT` | No response within timeout period |
 | `SDI12_ERR_CRC_MISMATCH` | CRC verification failed |
 | `SDI12_ERR_PARSE_FAILED` | Response could not be parsed |
-| `SDI12_ERR_ABORTED` | Operation aborted |
 
 ---
 

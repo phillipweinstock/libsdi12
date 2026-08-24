@@ -94,13 +94,6 @@ typedef char (*sdi12_load_address_fn)(void *user_data);
 typedef void (*sdi12_service_request_fn)(void *user_data);
 
 /**
- * @brief Callback for device reset (aX! extended command).
- *
- * @param user_data  User pointer from callbacks.
- */
-typedef void (*sdi12_reset_fn)(void *user_data);
-
-/**
  * @brief Extended command handler callback.
  *
  * @param xcmd       The extended command string (everything between 'X' and '!').
@@ -159,7 +152,6 @@ typedef struct {
     sdi12_load_address_fn     load_address;     /**< Load persisted address. */
     sdi12_start_measurement_fn start_measurement; /**< Async measurement (NULL = sync). */
     sdi12_service_request_fn  service_request;  /**< Send service request. */
-    sdi12_reset_fn            on_reset;         /**< Device reset hook. */
     sdi12_format_binary_fn    format_binary_page; /**< Binary HV data (NULL = unsupported). */
 
     void *user_data; /**< Passed to all callbacks. */
