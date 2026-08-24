@@ -53,11 +53,6 @@ static void sdi_send(const char *data, size_t len, void *ud) {
     hw_gpio_set(DIR_PIN, 0);
 }
 
-static void sdi_dir(sdi12_dir_t dir, void *ud) {
-    (void)ud;
-    hw_gpio_set(DIR_PIN, dir == SDI12_DIR_TX ? 1 : 0);
-}
-
 static sdi12_value_t sdi_read(uint8_t idx, void *ud) {
     (void)ud;
     sdi12_value_t v = {0.0f, 0};
@@ -72,7 +67,7 @@ static sdi12_value_t sdi_read(uint8_t idx, void *ud) {
 
 SDI12_SENSOR_DEFINE(sensor, '0',
     "MYCO    ", "IRQ-01", "100", "SN-12345     ",
-    sdi_send, sdi_dir, sdi_read);
+    sdi_send, sdi_read);
 
 /* ══════════════════════════════════════════════════════════════════════
  *  INTERRUPT SERVICE ROUTINES

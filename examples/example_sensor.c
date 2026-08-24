@@ -58,15 +58,6 @@ static void cb_send_response(const char *data, size_t len, void *user_data)
 }
 
 /**
- * Control the bus direction pin.
- */
-static void cb_set_direction(sdi12_dir_t dir, void *user_data)
-{
-    (void)user_data;
-    gpio_set_pin(DIR_PIN, dir == SDI12_DIR_TX ? DIR_HIGH : DIR_LOW);
-}
-
-/**
  * Read a measurement parameter by index.
  * Return the current value with the desired decimal precision.
  */
@@ -137,7 +128,6 @@ void sensor_setup(void)
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = cb_send_response;
-    cb.set_direction = cb_set_direction;
     cb.read_param    = cb_read_param;
     cb.save_address  = cb_save_address;  /* optional: persist address */
     cb.load_address  = cb_load_address;  /* optional: restore on boot */

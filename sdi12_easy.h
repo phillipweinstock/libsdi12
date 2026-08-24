@@ -12,9 +12,15 @@
  *  SENSOR QUICK START
  * ──────────────────────────────────────────────────────────────────────
  *
- *   // 1. Tell the library how to talk to your hardware:
- *   void my_send(const char *d, size_t n, void *u) { Serial1.write(d, n); }
- *   void my_dir(sdi12_dir_t dir, void *u)          { digitalWrite(2, dir); }
+ *   // 1. Tell the library how to talk to your hardware.
+ *   //    my_send owns the TX/RX direction pin: switch to TX, write,
+ *   //    flush, switch back to RX.
+ *   void my_send(const char *d, size_t n, void *u) {
+ *       digitalWrite(2, HIGH);          // TX
+ *       Serial1.write(d, n);
+ *       Serial1.flush();
+ *       digitalWrite(2, LOW);           // RX
+ *   }
  *
  *   // 2. Tell the library how to read your sensors:
  *   sdi12_value_t my_read(uint8_t idx, void *u) {
@@ -27,7 +33,7 @@
  *   // 3. Define your sensor in one block:
  *   SDI12_SENSOR_DEFINE(my_sensor, '0',
  *       "MYVENDOR", "MDL001", "100", "SN001",
- *       my_send, my_dir, my_read);
+ *       my_send, my_read);
  *
  *   // 4. Register what you measure:
  *   void setup() {
@@ -100,11 +106,11 @@ extern "C" {
  * @param fw_ver     Firmware version string (max 3 chars).
  * @param serial     Serial number string (max 13 chars).
  * @param send_fn    void fn(const char *data, size_t len, void *user_data)
- * @param dir_fn     void fn(sdi12_dir_t dir, void *user_data)
+ *                   — owns TX/RX switching: TX, write, flush, back to RX
  * @param read_fn    sdi12_value_t fn(uint8_t param_index, void *user_data)
  */
 #define SDI12_SENSOR_DEFINE(name, addr, vendor, model, fw_ver, serial, \
-                            send_fn, dir_fn, read_fn) \
+                            send_fn, read_fn) \
     static sdi12_sensor_ctx_t name##_ctx; \
     static const char  name##_addr    = (addr); \
     static const char *name##_vendor  = (vendor); \
@@ -112,7 +118,6 @@ extern "C" {
     static const char *name##_fwver   = (fw_ver); \
     static const char *name##_serial  = (serial); \
     static sdi12_send_response_fn  name##_send  = (send_fn); \
-    static sdi12_set_direction_fn  name##_dir   = (dir_fn); \
     static sdi12_read_param_fn     name##_read  = (read_fn)
 
 /**
@@ -144,7 +149,6 @@ extern "C" {
         sdi12_sensor_callbacks_t name##_cb; \
         memset(&name##_cb, 0, sizeof(name##_cb)); \
         name##_cb.send_response = name##_send; \
-        name##_cb.set_direction = name##_dir; \
         name##_cb.read_param    = name##_read; \
         \
         sdi12_sensor_init(&name##_ctx, name##_addr, &name##_id, &name##_cb); \
@@ -182,7 +186,6 @@ extern "C" {
         sdi12_sensor_callbacks_t name##_cb; \
         memset(&name##_cb, 0, sizeof(name##_cb)); \
         name##_cb.send_response = name##_send; \
-        name##_cb.set_direction = name##_dir; \
         name##_cb.read_param    = name##_read; \
         name##_cb.save_address  = (save_fn); \
         name##_cb.load_address  = (load_fn); \

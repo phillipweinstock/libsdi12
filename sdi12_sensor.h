@@ -67,14 +67,6 @@ typedef uint16_t (*sdi12_start_measurement_fn)(uint8_t group,
 typedef void (*sdi12_send_response_fn)(const char *data, size_t len, void *user_data);
 
 /**
- * @brief Callback to control the bus direction pin.
- *
- * @param dir   SDI12_DIR_TX or SDI12_DIR_RX.
- * @param user_data  User pointer from callbacks.
- */
-typedef void (*sdi12_set_direction_fn)(sdi12_dir_t dir, void *user_data);
-
-/**
  * @brief Callback to persist the sensor address to non-volatile storage.
  *
  * @param address  New address character.
@@ -159,8 +151,7 @@ typedef size_t (*sdi12_format_binary_fn)(uint16_t page,
 
 typedef struct {
     /* Required callbacks */
-    sdi12_send_response_fn    send_response;   /**< Send formatted response. */
-    sdi12_set_direction_fn    set_direction;    /**< Control TX/RX direction. */
+    sdi12_send_response_fn    send_response;   /**< Send formatted response (handles TX/RX switching). */
     sdi12_read_param_fn       read_param;       /**< Read a sensor parameter. */
 
     /* Optional callbacks (NULL = feature disabled or default behavior) */

@@ -53,6 +53,7 @@ extern void test_sensor_init_ok(void);
 extern void test_sensor_init_null_ctx(void);
 extern void test_sensor_init_invalid_address(void);
 extern void test_sensor_init_missing_send_callback(void);
+extern void test_sensor_init_needs_only_send_and_read(void);
 extern void test_sensor_init_loads_persisted_address(void);
 extern void test_sensor_acknowledge(void);
 extern void test_sensor_query_address(void);
@@ -197,6 +198,7 @@ int main(void)
     RUN_TEST(test_sensor_init_null_ctx);
     RUN_TEST(test_sensor_init_invalid_address);
     RUN_TEST(test_sensor_init_missing_send_callback);
+    RUN_TEST(test_sensor_init_needs_only_send_and_read);
     RUN_TEST(test_sensor_init_loads_persisted_address);
     RUN_TEST(test_sensor_acknowledge);
     RUN_TEST(test_sensor_query_address);

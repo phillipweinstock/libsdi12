@@ -390,11 +390,9 @@ void test_meta_sensor_hb_with_binary_callback(void)
     sdi12_sensor_callbacks_t cb = {0};
     /* Need to get the mock functions — declare extern */
     extern void mock_send_response(const char *, size_t, void *);
-    extern void mock_set_direction(sdi12_dir_t, void *);
     extern sdi12_value_t mock_read_param(uint8_t, void *);
 
     cb.send_response     = mock_send_response;
-    cb.set_direction     = mock_set_direction;
     cb.read_param        = mock_read_param;
     cb.format_binary_page = mock_format_binary;
 

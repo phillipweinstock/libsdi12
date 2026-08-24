@@ -703,7 +703,7 @@ sdi12_err_t sdi12_sensor_init(sdi12_sensor_ctx_t *ctx,
     if (!ctx || !ident || !callbacks) {
         return SDI12_ERR_CALLBACK_MISSING;
     }
-    if (!callbacks->send_response || !callbacks->set_direction || !callbacks->read_param) {
+    if (!callbacks->send_response || !callbacks->read_param) {
         return SDI12_ERR_CALLBACK_MISSING;
     }
     if (!sdi12_valid_address(address)) {

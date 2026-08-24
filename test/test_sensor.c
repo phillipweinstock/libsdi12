@@ -30,7 +30,6 @@
 
 char mock_response[256];
 size_t mock_response_len;
-sdi12_dir_t mock_direction;
 char mock_saved_address;
 int mock_send_count;
 
@@ -42,12 +41,6 @@ void mock_send_response(const char *data, size_t len, void *user_data)
     mock_response[len] = '\0';
     mock_response_len = len;
     mock_send_count++;
-}
-
-void mock_set_direction(sdi12_dir_t dir, void *user_data)
-{
-    (void)user_data;
-    mock_direction = dir;
 }
 
 sdi12_value_t mock_read_param(uint8_t param_index, void *user_data)
@@ -81,7 +74,6 @@ void reset_mocks(void)
 {
     memset(mock_response, 0, sizeof(mock_response));
     mock_response_len = 0;
-    mock_direction = SDI12_DIR_RX;
     mock_saved_address = '\0';
     mock_send_count = 0;
 }
@@ -102,7 +94,6 @@ sdi12_sensor_ctx_t create_test_ctx(char address)
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
     cb.save_address  = mock_save_address;
     cb.load_address  = mock_load_address;
@@ -133,7 +124,6 @@ void test_sensor_init_ok(void)
 
     sdi12_sensor_callbacks_t cb = {0};
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
 
     sdi12_err_t err = sdi12_sensor_init(&ctx, '0', &ident, &cb);
@@ -147,7 +137,6 @@ void test_sensor_init_null_ctx(void)
     sdi12_ident_t ident = {0};
     sdi12_sensor_callbacks_t cb = {0};
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
 
     TEST_ASSERT_EQUAL(SDI12_ERR_CALLBACK_MISSING,
@@ -164,11 +153,27 @@ void test_sensor_init_invalid_address(void)
 
     sdi12_sensor_callbacks_t cb = {0};
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
 
     TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS,
                       sdi12_sensor_init(&ctx, '!', &ident, &cb));
+}
+
+/* TX/RX switching is the send_response callback's job (see its doc
+ * comment) — a sensor needs no separate direction callback. */
+void test_sensor_init_needs_only_send_and_read(void)
+{
+    sdi12_sensor_ctx_t ctx;
+    sdi12_ident_t ident = {0};
+    strncpy(ident.vendor, "TEST", sizeof(ident.vendor) - 1);
+    strncpy(ident.model, "M1", sizeof(ident.model) - 1);
+    strncpy(ident.firmware_version, "1", sizeof(ident.firmware_version) - 1);
+
+    sdi12_sensor_callbacks_t cb = {0};
+    cb.send_response = mock_send_response;
+    cb.read_param    = mock_read_param;
+
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_sensor_init(&ctx, '0', &ident, &cb));
 }
 
 void test_sensor_init_missing_send_callback(void)
@@ -181,7 +186,6 @@ void test_sensor_init_missing_send_callback(void)
 
     sdi12_sensor_callbacks_t cb = {0};
     /* send_response = NULL (missing) */
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
 
     TEST_ASSERT_EQUAL(SDI12_ERR_CALLBACK_MISSING,
@@ -201,7 +205,6 @@ void test_sensor_init_loads_persisted_address(void)
 
     sdi12_sensor_callbacks_t cb = {0};
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
     cb.load_address  = mock_load_address;
 
@@ -588,7 +591,6 @@ void test_sensor_register_max_params(void)
 
     sdi12_sensor_callbacks_t cb = {0};
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_param;
 
     sdi12_sensor_init(&ctx, '0', &ident, &cb);
@@ -693,7 +695,6 @@ static sdi12_sensor_ctx_t create_paging_ctx(char address)
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_wide;
 
     sdi12_sensor_init(&ctx, address, &ident, &cb);
@@ -905,7 +906,6 @@ void test_sensor_overlong_value_truncated_safely(void)
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = mock_send_response;
-    cb.set_direction = mock_set_direction;
     cb.read_param    = mock_read_overlong;
 
     sdi12_sensor_init(&ctx, '0', &ident, &cb);

@@ -15,14 +15,9 @@
 
 void my_send(const char *data, size_t len, void *ud) {
     (void)ud;
-    /* TODO: transmit data on your SDI-12 UART */
+    /* TODO: switch your direction pin to TX, transmit data on your
+     * SDI-12 UART, flush, then switch back to RX */
     (void)data; (void)len;
-}
-
-void my_dir(sdi12_dir_t dir, void *ud) {
-    (void)ud;
-    /* TODO: set your direction pin HIGH for TX, LOW for RX */
-    (void)dir;
 }
 
 sdi12_value_t my_read(uint8_t idx, void *ud) {
@@ -43,7 +38,7 @@ SDI12_SENSOR_DEFINE(weather, '0',
     "WX3000",    /* Model   (max 6 chars)  */
     "110",       /* Version (max 3 chars)  */
     "SN-00042",  /* Serial  (max 13 chars) */
-    my_send, my_dir, my_read);
+    my_send, my_read);
 
 /* ── Step 3: Initialise and register params ────────────────────────────── */
 
