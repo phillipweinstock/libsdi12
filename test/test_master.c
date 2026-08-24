@@ -12,6 +12,7 @@
  *   - Invalid/truncated inputs
  */
 #include "sdi12_test.h"
+#include <locale.h>
 #include <string.h>
 #include <math.h>
 #include "sdi12.h"
@@ -836,4 +837,81 @@ void test_master_bintype_sizes(void)
     TEST_ASSERT_EQUAL(8, sdi12_bintype_size(SDI12_BINTYPE_FLOAT64));
     TEST_ASSERT_EQUAL(0, sdi12_bintype_size((sdi12_bintype_t)0));
     TEST_ASSERT_EQUAL(0, sdi12_bintype_size((sdi12_bintype_t)99));
+}
+
+/* ── Cold-Review Batch: out-param hygiene, type field, drain, locale ────── */
+
+void test_master_start_measurement_timeout_zeroes_resp(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    /* no reply queued — recv returns 0 (timeout) */
+
+    sdi12_meas_response_t r;
+    memset(&r, 0xAA, sizeof(r));   /* poison */
+    TEST_ASSERT_EQUAL(SDI12_ERR_TIMEOUT, sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_STANDARD, 0, false, &r));
+
+    /* On failure the out-param must be zeroed, not left as garbage —
+     * the shipped examples read wait_seconds without checking the
+     * return value */
+    TEST_ASSERT_EQUAL(0, r.wait_seconds);
+    TEST_ASSERT_EQUAL(0, r.value_count);
+}
+
+void test_master_parse_meas_sets_type(void)
+{
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_parse_meas_response(
+        "000210", 6, SDI12_MEAS_CONCURRENT, &r));
+    TEST_ASSERT_EQUAL(SDI12_MEAS_CONCURRENT, r.type);
+}
+
+void test_master_hv_binary_oversized_packet_drained(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    /* Header claims a 1500-byte payload (over the 1000-byte cap);
+     * some payload bytes follow on the wire */
+    char pkt[64];
+    pkt[0] = '0';
+    pkt[1] = (char)(1500 & 0xFF);
+    pkt[2] = (char)(1500 >> 8);
+    pkt[3] = (char)SDI12_BINTYPE_UINT8;
+    memset(pkt + 4, 0x55, 50);
+    set_reply_bin(pkt, 54);
+
+    sdi12_bintype_t type;
+    uint8_t out[16];
+    size_t out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_ERR_BUFFER_OVERFLOW,
+                      sdi12_master_get_hv_binary_data(&m, '0', 0, &type,
+                                                      out, &out_len));
+
+    /* The pending wire bytes must be consumed (drained until the line
+     * goes quiet) so the next transaction doesn't read mid-packet
+     * garbage */
+    TEST_ASSERT_EQUAL(m_reply_len, m_reply_pos);
+}
+
+void test_master_parse_locale_independent(void)
+{
+    char *old = setlocale(LC_NUMERIC, "de-DE");
+    if (old == NULL && setlocale(LC_NUMERIC, "German_Germany.1252") == NULL) {
+        TEST_ASSERT_TRUE(1);  /* locale unavailable — nothing to test */
+        return;
+    }
+
+    sdi12_value_t vals[4];
+    uint8_t count = 0;
+    sdi12_master_parse_data_values("+3.14-2.50", 10, vals, 4, &count, false);
+
+    setlocale(LC_NUMERIC, "C");
+
+    /* strtod in a comma-decimal locale stops at the point and returns
+     * silently wrong values (3.0, 2.0) — parsing must be
+     * locale-independent */
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 3.14f, vals[0].value);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, -2.50f, vals[1].value);
+    TEST_ASSERT_EQUAL(2, vals[0].decimals);
 }

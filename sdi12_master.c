@@ -267,6 +267,10 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
     /* Groups run M/C only, 1-9 (0 = base command) */
     if (group > 9) return SDI12_ERR_INVALID_COMMAND;
 
+    /* Zero the out-param up front so a timeout never leaves callers
+     * reading stack garbage (e.g. an 18-hour wait_seconds). */
+    memset(resp, 0, sizeof(*resp));
+
     /* Build command */
     char cmd[16];
     switch (type) {
@@ -603,6 +607,7 @@ sdi12_err_t sdi12_master_parse_meas_response(const char *resp_str, size_t len,
     if (!resp_str || !resp) return SDI12_ERR_INVALID_COMMAND;
 
     memset(resp, 0, sizeof(*resp));
+    resp->type = type;
 
     /* Minimum length: address(1) + ttt(3) + n(1) = 5 */
     if (len < 5) return SDI12_ERR_INVALID_COMMAND;
@@ -689,23 +694,31 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
         }
 
         if (pos > start + 1) {
-            /* Parse the numeric value */
-            char vbuf[SDI12_VALUE_MAX_CHARS + 1];
+            /* Parse the numeric value by hand — strtod is LC_NUMERIC-
+             * sensitive: in a comma-decimal locale it stops at '.' and
+             * silently returns wrong values. The pd.d grammar is
+             * sign, digits, one optional point, digits. */
             size_t vlen = pos - start;
             if (vlen > SDI12_VALUE_MAX_CHARS) vlen = SDI12_VALUE_MAX_CHARS;
 
-            memcpy(vbuf, resp_str + start, vlen);
-            vbuf[vlen] = '\0';
-
-            values[*count].value = (float)strtod(vbuf, NULL);
-
-            /* Count decimal places */
-            const char *dot = (const char *)memchr(vbuf, '.', vlen);
-            if (dot) {
-                values[*count].decimals = (uint8_t)(vlen - (size_t)(dot - vbuf) - 1);
-            } else {
-                values[*count].decimals = 0;
+            double mag = 0.0, frac_scale = 1.0;
+            uint8_t decs = 0;
+            bool in_frac = false;
+            for (size_t vi = 1; vi < vlen; vi++) {
+                char c = resp_str[start + vi];
+                if (c == '.') { in_frac = true; continue; }
+                if (in_frac) {
+                    frac_scale /= 10.0;
+                    mag += (c - '0') * frac_scale;
+                    decs++;
+                } else {
+                    mag = mag * 10.0 + (c - '0');
+                }
             }
+
+            values[*count].value =
+                (resp_str[start] == '-') ? (float)-mag : (float)mag;
+            values[*count].decimals = decs;
 
             (*count)++;
         }
@@ -803,7 +816,17 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     /* Read payload + CRC into a local buffer */
     size_t tail_len = (size_t)pkt_size + 2; /* payload + CRC(2) */
     char tail[SDI12_BIN_MAX_PAYLOAD + 2];
-    if (pkt_size > SDI12_BIN_MAX_PAYLOAD) return SDI12_ERR_BUFFER_OVERFLOW;
+    if (pkt_size > SDI12_BIN_MAX_PAYLOAD) {
+        /* The sensor is still transmitting its oversized payload —
+         * drain it (until the line goes quiet) so the next transaction
+         * doesn't start reading mid-packet. */
+        while (ctx->cb.recv(ctx->resp_buf, sizeof(ctx->resp_buf),
+                            SDI12_RESPONSE_TIMEOUT_MS,
+                            ctx->cb.user_data) > 0) {
+            /* discard */
+        }
+        return SDI12_ERR_BUFFER_OVERFLOW;
+    }
 
     err = recv_exact(ctx, tail, tail_len, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;

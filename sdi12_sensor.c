@@ -48,32 +48,66 @@ static uint8_t collect_group_indices(const sdi12_sensor_ctx_t *ctx,
 /** Largest magnitude a data value can carry: 7 digits per §4.4.8 Table 11. */
 #define SDI12_VALUE_LIMIT 9999999.0f
 
-/** Format a single value with mandatory sign prefix per SDI-12 spec. */
+/**
+ * Format a single value with mandatory sign prefix per SDI-12 spec.
+ *
+ * Hand-rolled fixed-point formatting: printf's %f is LC_NUMERIC-
+ * sensitive, and a host application calling setlocale() must not make
+ * the sensor emit "+3,14" on the wire. Integer conversions (%lu) are
+ * locale-safe.
+ *
+ * The requested decimals are reduced so integer digits + decimals never
+ * exceed the spec's 7-digit total — the value is ROUNDED to the
+ * precision that fits, never truncated as a string.
+ */
 static int format_value(char *buf, size_t buflen, sdi12_value_t val)
 {
     float v = val.value;
 
     /* Non-finite input (dead ADC, failed conversion) or a magnitude
-     * beyond the 7-digit cap: saturate to the ±9999999 sentinel instead
-     * of letting printf emit "inf"/"nan" or the integer cast below hit
-     * undefined behavior. Integer form regardless of requested decimals
-     * — a fractional part at this magnitude would exceed the 9-char cap.
+     * beyond the 7-digit cap: saturate to the ±9999999 sentinel.
      * The negated comparison is deliberate: it is also true for NaN. */
     if (!(fabsf(v) <= SDI12_VALUE_LIMIT)) {
         return snprintf(buf, buflen, "%c9999999", v < 0.0f ? '-' : '+');
     }
 
     char sign = v >= 0.0f ? '+' : '-';
-    float absval = fabsf(v);   /* -0.0f must print "+0.00", not "+-0.00" */
+    double absval = fabsf(v);  /* -0.0f must print "+0.00", not "+-0.00" */
 
-    /* 7 decimals can't fit the 9-char value cap (sign + digit + point
-     * + 7 = 10 chars): clamp to 6 so printf rounds the value instead
-     * of a truncated buffer chopping its last digit. */
-    uint8_t decimals = val.decimals > 6 ? 6 : val.decimals;
+    /* How many digits does the integer part need? */
+    unsigned int_digits = 1;
+    {
+        double t = absval;
+        while (t >= 10.0 && int_digits < 7) { t /= 10.0; int_digits++; }
+    }
 
-    /* %.0f rounds like every other decimals setting; an integer cast
-     * would truncate toward zero (25.7 -> "+25" instead of "+26"). */
-    return snprintf(buf, buflen, "%c%.*f", sign, decimals, (double)absval);
+    unsigned decimals = val.decimals;
+    if (decimals > 7u - int_digits) decimals = 7u - int_digits;
+    if (decimals > 6) decimals = 6;   /* 9-char cap: sign + d + '.' + 6 */
+
+    /* Scale to an integer with round-half-up. Total digits ≤ 7, so the
+     * scaled value fits comfortably in unsigned long everywhere. */
+    unsigned long scale = 1;
+    for (unsigned i = 0; i < decimals; i++) scale *= 10;
+    unsigned long scaled = (unsigned long)(absval * (double)scale + 0.5);
+
+    /* Rounding can carry into an extra digit (9.99 -> 10.0): drop
+     * decimals until the total fits 7 digits again. */
+    while (decimals > 0 && scaled >= 10000000UL) {
+        scaled = (scaled + 5) / 10;
+        decimals--;
+    }
+    if (scaled > 9999999UL) scaled = 9999999UL;
+
+    /* decimals may have shrunk above — recompute the divisor */
+    scale = 1;
+    for (unsigned i = 0; i < decimals; i++) scale *= 10;
+
+    if (decimals == 0) {
+        return snprintf(buf, buflen, "%c%lu", sign, scaled);
+    }
+    return snprintf(buf, buflen, "%c%lu.%0*lu", sign,
+                    scaled / scale, (int)decimals, scaled % scale);
 }
 
 /**
@@ -84,8 +118,11 @@ static int format_value(char *buf, size_t buflen, sdi12_value_t val)
  * signals "no data" (§4.4.8).
  */
 static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
-                                     uint8_t page,
-                                     uint16_t max_value_chars)
+                                     const sdi12_value_t *vals,
+                                     uint8_t nvals,
+                                     uint16_t page,
+                                     uint16_t max_value_chars,
+                                     bool with_crc)
 {
     char *buf = ctx->resp_buf;
     size_t buflen = sizeof(ctx->resp_buf);
@@ -97,12 +134,12 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
      * page_used counts value chars on the current page for ALL values,
      * not just the ones written, so page boundaries are computed the
      * same way regardless of which page was requested. */
-    uint8_t current_page = 0;
+    uint16_t current_page = 0;
     size_t  page_used = 0;
 
-    for (uint8_t i = 0; i < ctx->data_cache_count; i++) {
+    for (uint8_t i = 0; i < nvals; i++) {
         char vbuf[SDI12_VALUE_MAX_CHARS + 1];
-        int vlen = format_value(vbuf, sizeof(vbuf), ctx->data_cache[i]);
+        int vlen = format_value(vbuf, sizeof(vbuf), vals[i]);
 
         if (vlen <= 0) continue;
         /* snprintf returns the untruncated length — clamp to what was
@@ -118,7 +155,11 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
         if (current_page > page) break;
 
         if (current_page == page) {
-            if (pos + (size_t)vlen >= buflen - 6) { /* room for CRC + CRLF + null */
+            /* Room for CRC + CRLF + NUL after this value. Strictly
+             * greater-than: a value ending exactly at the limit fits —
+             * >= here silently dropped the value landing on the
+             * boundary (a page filling exactly 75 chars). */
+            if (pos + (size_t)vlen > buflen - 6) {
                 break;
             }
             memcpy(buf + pos, vbuf, (size_t)vlen);
@@ -131,7 +172,7 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
     buf[pos] = '\0';
 
     /* Append CRC if it was requested */
-    if (ctx->crc_requested) {
+    if (with_crc) {
         sdi12_crc_append(buf, buflen);
     } else {
         /* Append CR/LF */
@@ -210,8 +251,13 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
     uint8_t n = count_group(ctx, group);
 
     /* If sensor has no data for this group, respond with zero.
-     * §5.4: high-volume commands answer in the atttnnn form. */
+     * §5.4: high-volume commands answer in the atttnnn form.
+     * The new measurement command still invalidates any retained data
+     * (§4.4.5) — a following D must not serve the previous group's
+     * values under this group's name. */
     if (n == 0) {
+        ctx->data_available = false;
+        ctx->data_cache_count = 0;
         if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
                      "%c0000\r\n", ctx->address);
@@ -363,7 +409,7 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
 }
 
 /** Handle aD0!–aD9! — Send data. */
-static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
+static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint16_t page)
 {
     if (!ctx->data_available) {
         /* No data — respond with just address */
@@ -417,7 +463,8 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
         max_chars = SDI12_C_VALUES_MAX_CHARS;
     }
 
-    format_data_page(ctx, page, max_chars);
+    format_data_page(ctx, ctx->data_cache, ctx->data_cache_count,
+                     page, max_chars, ctx->crc_requested);
     send_response(ctx);
 
     /* After the last page is read, data could be retained until next M/C/V */
@@ -428,12 +475,14 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint8_t page)
 static sdi12_err_t handle_continuous(sdi12_sensor_ctx_t *ctx,
                                       uint8_t index, bool with_crc)
 {
-    ctx->crc_requested = with_crc;
-    ctx->pending_meas_type = SDI12_MEAS_CONTINUOUS;
+    /* Continuous measurements are independent of the measurement cycle
+     * (§4.4.8.1) and may be interleaved between aMC! and aD0! — they
+     * must not disturb the pending data set, its CRC state, or the
+     * measurement type. Everything here is local. */
 
-    /* For continuous, we read the specific parameter group and respond immediately */
     /* R0 = all group 0 params, R1 = group 1 params, etc. */
-    uint8_t n = count_group(ctx, index);
+    uint8_t indices[SDI12_MAX_PARAMS];
+    uint8_t n = collect_group_indices(ctx, index, indices, SDI12_MAX_PARAMS);
 
     if (n == 0) {
         /* Sensor doesn't support this continuous measurement */
@@ -443,15 +492,20 @@ static sdi12_err_t handle_continuous(sdi12_sensor_ctx_t *ctx,
         } else {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
         }
+        ctx->resp_len = 0;
         send_response(ctx);
         return SDI12_OK;
     }
 
-    /* Read all params in this group synchronously */
-    read_group_sync(ctx, index);
+    /* Read the group into a local buffer */
+    sdi12_value_t rv[SDI12_MAX_PARAMS];
+    for (uint8_t i = 0; i < n; i++) {
+        rv[i] = ctx->cb.read_param(indices[i], ctx->cb.user_data);
+    }
 
     /* Format as a single data response (like D0) */
-    format_data_page(ctx, 0, SDI12_C_VALUES_MAX_CHARS);
+    ctx->resp_len = 0;
+    format_data_page(ctx, rv, n, 0, SDI12_C_VALUES_MAX_CHARS, with_crc);
     send_response(ctx);
 
     return SDI12_OK;
@@ -461,7 +515,11 @@ static sdi12_err_t handle_continuous(sdi12_sensor_ctx_t *ctx,
 static sdi12_err_t handle_change_address(sdi12_sensor_ctx_t *ctx, char new_addr)
 {
     if (!sdi12_valid_address(new_addr)) {
-        return SDI12_ERR_INVALID_ADDRESS;
+        /* Table 8: unable to change — respond with the ORIGINAL
+         * address so the recorder learns the change failed. */
+        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
+        send_response(ctx);
+        return SDI12_OK;
     }
 
     ctx->address = new_addr;
@@ -516,12 +574,15 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
     /* Check for parameter metadata request (contains '_') */
     const char *underscore = (const char *)memchr(cmd + 2, '_', len - 2);
     if (underscore) {
-        /* Parse parameter number after '_' */
-        int param_num = 0;
+        /* Parse nnn after '_': Table 20 defines exactly three digits.
+         * An unbounded digit run previously overflowed a signed int. */
         const char *p = underscore + 1;
-        while (*p >= '0' && *p <= '9') {
-            param_num = param_num * 10 + (*p - '0');
-            p++;
+        const char *cmd_end = cmd + len;
+        if (cmd_end - p != 3) return SDI12_ERR_INVALID_COMMAND;
+        int param_num = 0;
+        for (int di = 0; di < 3; di++) {
+            if (p[di] < '0' || p[di] > '9') return SDI12_ERR_INVALID_COMMAND;
+            param_num = param_num * 10 + (p[di] - '0');
         }
 
         /* Determine which group this refers to */
@@ -669,9 +730,16 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
 static sdi12_err_t handle_extended(sdi12_sensor_ctx_t *ctx,
                                     const char *cmd, size_t len)
 {
-    /* cmd[0]=address, cmd[1]='X', cmd[2..len-1] = extended payload */
-    const char *xcmd_str = cmd + 2;
+    /* cmd[0]=address, cmd[1]='X', cmd[2..len-1] = extended payload.
+     * Handlers receive it as a NUL-terminated string with no trailing
+     * '!' (per the sdi12_xcmd_handler_fn contract), so copy it out of
+     * the caller's unterminated buffer. */
+    char xcmd_buf[SDI12_MAX_COMMAND_LEN + 1];
     size_t xcmd_len = len - 2;
+    if (xcmd_len > SDI12_MAX_COMMAND_LEN) xcmd_len = SDI12_MAX_COMMAND_LEN;
+    memcpy(xcmd_buf, cmd + 2, xcmd_len);
+    xcmd_buf[xcmd_len] = '\0';
+    const char *xcmd_str = xcmd_buf;
 
     /* Search registered extended command handlers */
     for (uint8_t i = 0; i < ctx->xcmd_count; i++) {
@@ -784,6 +852,44 @@ sdi12_err_t sdi12_sensor_register_xcmd(sdi12_sensor_ctx_t *ctx,
     return SDI12_OK;
 }
 
+/** Structural grammar check for an address-stripped-'!' command.
+ *  Mirrors the dispatcher's per-family rules; used to gate the
+ *  concurrent-measurement abort so malformed bus noise cannot abort
+ *  a measurement (§4.4.7.1 aborts on VALID commands only). */
+static bool command_well_formed(const char *cmd, size_t cmdlen)
+{
+    if (cmdlen == 1) return true;               /* a! / ?! */
+
+    switch (cmd[1]) {
+    case 'I':
+        return true;    /* aI! + metadata family (detail-checked later) */
+    case 'M': case 'C': {
+        bool crc = (cmdlen > 2 && cmd[2] == 'C');
+        size_t dp = crc ? 3 : 2;
+        bool dig = (dp < cmdlen && cmd[dp] >= '1' && cmd[dp] <= '9');
+        return cmdlen == dp + (dig ? 1u : 0u);
+    }
+    case 'V': return cmdlen == 2;
+    case 'A': return cmdlen == 3 && isprint((unsigned char)cmd[2]);
+    case 'H': return cmdlen == 3 && (cmd[2] == 'A' || cmd[2] == 'B');
+    case 'R': {
+        bool crc = (cmdlen > 2 && cmd[2] == 'C');
+        size_t dp = crc ? 3 : 2;
+        return cmdlen == dp + 1 &&
+               cmd[dp] >= '0' && cmd[dp] <= '9';
+    }
+    case 'D': {
+        size_t i = (cmdlen > 2 && cmd[2] == 'B') ? 3 : 2;
+        if (i >= cmdlen) return false;
+        for (; i < cmdlen; i++)
+            if (cmd[i] < '0' || cmd[i] > '9') return false;
+        return true;
+    }
+    case 'X': return cmdlen > 2;
+    default:  return false;
+    }
+}
+
 sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
                                   const char *cmd, size_t len)
 {
@@ -810,9 +916,12 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
         return SDI12_ERR_NOT_ADDRESSED;
     }
 
-    /* If we receive a valid command addressed to us while in concurrent
-       measurement state, abort the measurement per spec §4.4.7 */
-    if (is_addressed && ctx->state == SDI12_STATE_MEASURING_C) {
+    /* §4.4.7.1: a VALID command addressed to us while a concurrent
+       measurement is running aborts it. Malformed traffic (bus noise
+       that happens to look addressed) must NOT kill the measurement,
+       so the grammar check comes first. */
+    if (is_addressed && ctx->state == SDI12_STATE_MEASURING_C &&
+        command_well_formed(cmd, cmdlen)) {
         ctx->state = SDI12_STATE_READY;
         ctx->data_available = false;
         ctx->data_cache_count = 0;
@@ -867,54 +976,47 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
     }
 
     case 'D': {
-        /* aD0!–aD9!, aDB0!–aDB999! */
-        if (cmdlen >= 3) {
-            /* Check for aDBn! (binary data packet per §5.2) */
-            if (cmd[2] == 'B') {
-                uint16_t page = 0;
-                for (size_t i = 3; i < cmdlen; i++) {
-                    if (cmd[i] >= '0' && cmd[i] <= '9')
-                        page = (uint16_t)(page * 10 + (cmd[i] - '0'));
-                    else
-                        break;
-                }
-                return handle_send_binary_data(ctx, page);
-            }
-            /* aDn! — standard ASCII data */
-            uint16_t page = 0;
-            for (size_t i = 2; i < cmdlen; i++) {
-                if (cmd[i] >= '0' && cmd[i] <= '9') {
-                    page = (uint16_t)(page * 10 + (cmd[i] - '0'));
-                } else {
-                    break;
-                }
-            }
-            return handle_send_data(ctx, (uint8_t)(page > 255 ? 255 : page));
+        /* aD0!–aD999!, aDB0!–aDB999! — digits only, nothing trailing */
+        size_t i = (cmdlen > 2 && cmd[2] == 'B') ? 3 : 2;
+        if (i >= cmdlen) return SDI12_ERR_INVALID_COMMAND;
+
+        uint16_t page = 0;
+        for (; i < cmdlen; i++) {
+            if (cmd[i] < '0' || cmd[i] > '9')
+                return SDI12_ERR_INVALID_COMMAND;
+            page = (uint16_t)(page * 10 + (cmd[i] - '0'));
+            if (page > 999) return SDI12_ERR_INVALID_COMMAND;
         }
-        return SDI12_ERR_INVALID_COMMAND;
+
+        if (cmd[2] == 'B')
+            return handle_send_binary_data(ctx, page);
+        return handle_send_data(ctx, page);
     }
 
     case 'R': {
-        /* aR0!–aR9!, aRC0!–aRC9! */
+        /* aR0!–aR9!, aRC0!–aRC9! — the digit is REQUIRED, no extras */
         bool crc = (cmdlen > 2 && cmd[2] == 'C');
         size_t digit_pos = crc ? 3 : 2;
-        uint8_t index = 0;
 
-        if (digit_pos < cmdlen && cmd[digit_pos] >= '0' && cmd[digit_pos] <= '9') {
-            index = (uint8_t)(cmd[digit_pos] - '0');
+        if (cmdlen != digit_pos + 1 ||
+            cmd[digit_pos] < '0' || cmd[digit_pos] > '9') {
+            return SDI12_ERR_INVALID_COMMAND;
         }
 
-        return handle_continuous(ctx, index, crc);
+        return handle_continuous(ctx, (uint8_t)(cmd[digit_pos] - '0'), crc);
     }
 
     case 'V': {
-        /* aV! — Verification. Same flow as M but uses group 0. */
+        /* aV! — Verification. Exactly two characters. */
+        if (cmdlen != 2) return SDI12_ERR_INVALID_COMMAND;
         return handle_measurement(ctx, 0, false, SDI12_MEAS_VERIFICATION);
     }
 
     case 'A': {
-        /* aAb! — Change address. Exactly three characters. */
-        if (cmdlen == 3 && isprint((unsigned char)cmd[2])) {
+        /* aAb! — Change address. Exactly three characters. '!' can
+         * only be a terminator, so an interior '!' means the command
+         * is malformed (silence), not merely unchangeable. */
+        if (cmdlen == 3 && cmd[2] != '!' && isprint((unsigned char)cmd[2])) {
             return handle_change_address(ctx, cmd[2]);
         }
         return SDI12_ERR_INVALID_COMMAND;
@@ -947,6 +1049,14 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
                                            uint8_t count)
 {
     if (!ctx || (!values && count > 0)) return SDI12_ERR_INVALID_COMMAND;
+
+    /* A break (or addressed command) may have aborted the measurement
+     * while the hardware was still busy — §4.4.5.1 empties the buffer,
+     * and a late completion must not resurrect it. */
+    if (ctx->state != SDI12_STATE_MEASURING &&
+        ctx->state != SDI12_STATE_MEASURING_C) {
+        return SDI12_ERR_INVALID_COMMAND;
+    }
 
     /* Store the values in the cache */
     uint8_t n = count;

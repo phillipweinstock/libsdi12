@@ -115,6 +115,18 @@ extern void test_sensor_bare_h_ignored(void);
 extern void test_sensor_bare_ir_ignored(void);
 extern void test_sensor_decimals0_rounds(void);
 extern void test_sensor_identify_meas_reports_ttt(void);
+extern void test_sensor_page_boundary_75_keeps_last_value(void);
+extern void test_sensor_wide_values_reduce_precision_and_round(void);
+extern void test_sensor_malformed_vrd_ignored(void);
+extern void test_sensor_invalid_command_preserves_concurrent(void);
+extern void test_sensor_measurement_done_ignored_after_abort(void);
+extern void test_sensor_new_measurement_clears_stale_data(void);
+extern void test_sensor_r_does_not_clobber_pending_crc(void);
+extern void test_sensor_rc_does_not_add_pending_crc(void);
+extern void test_sensor_xcmd_handler_gets_clean_string(void);
+extern void test_sensor_change_address_invalid_target_echoes_original(void);
+extern void test_sensor_metadata_param_number_must_be_three_digits(void);
+extern void test_sensor_format_locale_independent(void);
 
 /* test_master.c */
 extern void test_parse_meas_m_basic(void);
@@ -175,6 +187,10 @@ extern void test_master_get_hv_data_missing_crc_rejected(void);
 extern void test_master_start_measurement_wrong_address_rejected(void);
 extern void test_master_measurement_group_range_rejected(void);
 extern void test_master_change_address_allows_persist_time(void);
+extern void test_master_start_measurement_timeout_zeroes_resp(void);
+extern void test_master_parse_meas_sets_type(void);
+extern void test_master_hv_binary_oversized_packet_drained(void);
+extern void test_master_parse_locale_independent(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -349,6 +365,10 @@ int main(void)
     RUN_TEST(test_master_start_measurement_wrong_address_rejected);
     RUN_TEST(test_master_measurement_group_range_rejected);
     RUN_TEST(test_master_change_address_allows_persist_time);
+    RUN_TEST(test_master_start_measurement_timeout_zeroes_resp);
+    RUN_TEST(test_master_parse_meas_sets_type);
+    RUN_TEST(test_master_hv_binary_oversized_packet_drained);
+    RUN_TEST(test_master_parse_locale_independent);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);
@@ -392,6 +412,18 @@ int main(void)
     RUN_TEST(test_sensor_bare_ir_ignored);
     RUN_TEST(test_sensor_decimals0_rounds);
     RUN_TEST(test_sensor_identify_meas_reports_ttt);
+    RUN_TEST(test_sensor_page_boundary_75_keeps_last_value);
+    RUN_TEST(test_sensor_wide_values_reduce_precision_and_round);
+    RUN_TEST(test_sensor_malformed_vrd_ignored);
+    RUN_TEST(test_sensor_invalid_command_preserves_concurrent);
+    RUN_TEST(test_sensor_measurement_done_ignored_after_abort);
+    RUN_TEST(test_sensor_new_measurement_clears_stale_data);
+    RUN_TEST(test_sensor_r_does_not_clobber_pending_crc);
+    RUN_TEST(test_sensor_rc_does_not_add_pending_crc);
+    RUN_TEST(test_sensor_xcmd_handler_gets_clean_string);
+    RUN_TEST(test_sensor_change_address_invalid_target_echoes_original);
+    RUN_TEST(test_sensor_metadata_param_number_must_be_three_digits);
+    RUN_TEST(test_sensor_format_locale_independent);
 
     /* Runs last: a regression here previously segfaulted */
     RUN_TEST(test_sensor_measurement_done_null_values);

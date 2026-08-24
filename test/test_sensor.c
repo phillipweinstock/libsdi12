@@ -21,6 +21,7 @@
  *   - Parameter registration limits
  */
 #include "sdi12_test.h"
+#include <locale.h>
 #include <stdio.h>
 #include <string.h>
 #include "sdi12.h"
@@ -921,12 +922,10 @@ void test_sensor_overlong_value_truncated_safely(void)
 
     sdi12_sensor_process(&ctx, "0D0!", 4);
 
-    /* Value must be clamped to SDI12_VALUE_MAX_CHARS — no garbage bytes */
-    size_t len = strlen(mock_response);
-    TEST_ASSERT_LESS_OR_EQUAL(1 + SDI12_VALUE_MAX_CHARS + 2, len);
-    TEST_ASSERT_TRUE(strncmp(mock_response, "0+12345.67", 10) == 0);
-    TEST_ASSERT_EQUAL_CHAR('\r', mock_response[len - 2]);
-    TEST_ASSERT_EQUAL_CHAR('\n', mock_response[len - 1]);
+    /* The formatter must REDUCE PRECISION to fit the 9-char cap and
+     * round — never chop a formatted string. 5 integer digits leave
+     * room for 2 decimals: 12345.6777 -> +12345.68 (rounded). */
+    TEST_ASSERT_EQUAL_STRING("0+12345.68\r\n", mock_response);
 }
 
 /* ── measurement_done NULL Guard ────────────────────────────────────────── */
@@ -1217,4 +1216,254 @@ void test_sensor_identify_meas_reports_ttt(void)
     /* §6.1: the aIM! response is identical to aM!'s — it must carry
      * the sensor's real ttt, not a hardcoded 000. */
     TEST_ASSERT_EQUAL_STRING("00455\r\n", mock_response);
+}
+
+/* ── Cold-Review Batch: pagination boundary, precision, grammar, state ──── */
+
+static sdi12_value_t mock_read_boundary75(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = { 12345.67f, 2 };   /* "+12345.67" = 9 chars */
+    if (idx == 8) { v.value = 55.0f; v.decimals = 0; }  /* "+55" = 3 */
+    return v;
+}
+
+/** 8x9 + 1x3 = exactly 75 value chars — the spec page limit. */
+void test_sensor_page_boundary_75_keeps_last_value(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx;
+    sdi12_ident_t ident = {0};
+    strncpy(ident.vendor, "TEST", sizeof(ident.vendor) - 1);
+    strncpy(ident.model, "M1", sizeof(ident.model) - 1);
+    strncpy(ident.firmware_version, "1", sizeof(ident.firmware_version) - 1);
+
+    sdi12_sensor_callbacks_t cb = {0};
+    cb.send_response = mock_send_response;
+    cb.read_param    = mock_read_boundary75;
+    sdi12_sensor_init(&ctx, '0', &ident, &cb);
+    for (int i = 0; i < 9; i++)
+        sdi12_sensor_register_param(&ctx, 0, "TA", "C", 2);
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* All nine values fit page 0 at exactly 75 chars — the last value
+     * must not be silently dropped by the boundary arithmetic. */
+    TEST_ASSERT_NOT_NULL(strstr(mock_response, "+55"));
+    int plus = 0;
+    for (const char *p = mock_response; *p; p++) if (*p == '+') plus++;
+    TEST_ASSERT_EQUAL(9, plus);
+}
+
+static sdi12_value_t mock_read_widevals(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {0.0f, 0};
+    switch (idx) {
+    case 0: v.value = 9999999.0f; v.decimals = 6; break;
+    case 1: v.value = 1234.5678f; v.decimals = 4; break;
+    case 2: v.value = 123456.78f; v.decimals = 2; break;
+    default: break;
+    }
+    return v;
+}
+
+void test_sensor_wide_values_reduce_precision_and_round(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx;
+    sdi12_ident_t ident = {0};
+    strncpy(ident.vendor, "TEST", sizeof(ident.vendor) - 1);
+    strncpy(ident.model, "M1", sizeof(ident.model) - 1);
+    strncpy(ident.firmware_version, "1", sizeof(ident.firmware_version) - 1);
+
+    sdi12_sensor_callbacks_t cb = {0};
+    cb.send_response = mock_send_response;
+    cb.read_param    = mock_read_widevals;
+    sdi12_sensor_init(&ctx, '0', &ident, &cb);
+    for (int i = 0; i < 3; i++)
+        sdi12_sensor_register_param(&ctx, 0, "TA", "C", 2);
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* Integer digits + decimals must fit 7 digits total: reduce the
+     * decimals and ROUND. Never a chopped string or a trailing dot. */
+    TEST_ASSERT_EQUAL_STRING("0+9999999+1234.568+123456.8\r\n", mock_response);
+}
+
+void test_sensor_malformed_vrd_ignored(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0V9!", 4);
+    sdi12_sensor_process(&ctx, "0R!", 3);      /* R requires a digit */
+    sdi12_sensor_process(&ctx, "0RC!", 4);
+    sdi12_sensor_process(&ctx, "0R5X!", 5);
+    sdi12_sensor_process(&ctx, "0DX!", 4);
+    sdi12_sensor_process(&ctx, "0D0X!", 5);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+void test_sensor_invalid_command_preserves_concurrent(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+
+    /* Only a VALID addressed command aborts (4.4.7.1) — garbage and
+     * malformed commands (bus noise) must not kill the measurement */
+    sdi12_sensor_process(&ctx, "0ZZZ!", 5);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    sdi12_sensor_process(&ctx, "0V9!", 4);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+
+    /* A valid one still aborts */
+    sdi12_sensor_process(&ctx, "0!", 2);
+    TEST_ASSERT_EQUAL(SDI12_STATE_READY, ctx.state);
+}
+
+void test_sensor_measurement_done_ignored_after_abort(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING, ctx.state);
+
+    sdi12_sensor_break(&ctx);   /* abort */
+
+    /* Late async completion of the aborted measurement must not
+     * resurrect data (4.4.5.1: the buffer stays empty) */
+    sdi12_value_t vals[1] = { { 3.14f, 2 } };
+    sdi12_sensor_measurement_done(&ctx, vals, 1);
+
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);
+}
+
+void test_sensor_new_measurement_clears_stale_data(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0M5!", 4);   /* empty group: a0000 */
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* The new M command invalidated the old data — D must not serve
+     * group 0 values as if they belonged to group 5 */
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);
+}
+
+void test_sensor_r_does_not_clobber_pending_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0MC!", 4);
+    sdi12_sensor_process(&ctx, "0R0!", 4);   /* interleaved continuous */
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* Data was requested with aMC! — the interleaved aR0! must not
+     * strip the CRC from the pending data set */
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+}
+
+void test_sensor_rc_does_not_add_pending_crc(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0M!", 3);    /* plain — no CRC */
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0RC0!", 5);
+    /* The RC0 response itself carries a CRC... */
+    TEST_ASSERT_TRUE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+    /* ...but the pending aM! data set stays CRC-free */
+    TEST_ASSERT_FALSE(sdi12_crc_verify(mock_response, strlen(mock_response)));
+}
+
+static char xcmd_seen[32];
+static sdi12_err_t xcmd_capture(const char *xcmd, char *resp,
+                                size_t resp_size, void *ud)
+{
+    (void)resp_size; (void)ud;
+    strncpy(xcmd_seen, xcmd, sizeof(xcmd_seen) - 1);
+    xcmd_seen[sizeof(xcmd_seen) - 1] = '\0';
+    resp[1] = '\0';
+    return SDI12_OK;
+}
+
+void test_sensor_xcmd_handler_gets_clean_string(void)
+{
+    reset_mocks();
+    memset(xcmd_seen, 0, sizeof(xcmd_seen));
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    sdi12_sensor_register_xcmd(&ctx, "RST", xcmd_capture);
+
+    sdi12_sensor_process(&ctx, "0XRST!", 6);
+
+    /* Contract: handler sees everything between X and the terminator,
+     * as a NUL-terminated string — no trailing bang */
+    TEST_ASSERT_EQUAL_STRING("RST", xcmd_seen);
+}
+
+void test_sensor_change_address_invalid_target_echoes_original(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    sdi12_sensor_process(&ctx, "0A#!", 4);
+
+    /* Table 8: unable to change -> respond with the ORIGINAL address */
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);
+    TEST_ASSERT_EQUAL_CHAR('0', ctx.address);
+}
+
+void test_sensor_metadata_param_number_must_be_three_digits(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    /* nnn is exactly three digits (Table 20) — overlong digit runs
+     * previously overflowed a signed int (UB) */
+    sdi12_sensor_process(&ctx, "0IM_99999999999999999999!", 25);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+void test_sensor_format_locale_independent(void)
+{
+    char *old = setlocale(LC_NUMERIC, "de-DE");
+    if (old == NULL && setlocale(LC_NUMERIC, "German_Germany.1252") == NULL) {
+        TEST_ASSERT_TRUE(1);  /* locale unavailable — nothing to test */
+        return;
+    }
+
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    setlocale(LC_NUMERIC, "C");
+
+    /* The wire format uses the point regardless of the host locale */
+    TEST_ASSERT_NOT_NULL(strstr(mock_response, "+25.50"));
+    TEST_ASSERT_NULL(strchr(mock_response, ','));
 }
