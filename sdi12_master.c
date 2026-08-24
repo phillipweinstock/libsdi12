@@ -725,6 +725,7 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
     /* Response: a<data>\r\n — skip address, trim CRLF */
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
     if (len < 1) return SDI12_ERR_PARSE_FAILED;
+    if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
     size_t data_len = len - 1; /* skip address */
     if (data_len > *raw_len) data_len = *raw_len;

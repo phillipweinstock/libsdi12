@@ -135,6 +135,27 @@ extern void test_master_hv_binary_wrong_address_rejected(void);
 extern void test_master_get_data_rejects_page_over_9(void);
 extern void test_master_hv_binary_rejects_page_over_999(void);
 extern void test_master_hv_data_rejects_page_over_999(void);
+extern void test_master_acknowledge_present(void);
+extern void test_master_acknowledge_absent_on_timeout(void);
+extern void test_master_query_address_cmd(void);
+extern void test_master_change_address_ok(void);
+extern void test_master_change_address_refused(void);
+extern void test_master_start_measurement_m(void);
+extern void test_master_start_measurement_mc_group(void);
+extern void test_master_start_measurement_concurrent(void);
+extern void test_master_verify_cmd(void);
+extern void test_master_continuous_values(void);
+extern void test_master_continuous_crc_verified(void);
+extern void test_master_wait_service_request_ok(void);
+extern void test_master_wait_service_request_wrong_address(void);
+extern void test_master_extended_roundtrip(void);
+extern void test_master_extended_multiline_two_lines(void);
+extern void test_master_identify_measurement_metadata(void);
+extern void test_master_identify_param_metadata(void);
+extern void test_master_get_hv_data_raw(void);
+extern void test_master_get_hv_data_wrong_address_rejected(void);
+extern void test_master_send_break_invokes_callback(void);
+extern void test_master_bintype_sizes(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -281,6 +302,27 @@ int main(void)
     RUN_TEST(test_master_get_data_rejects_page_over_9);
     RUN_TEST(test_master_hv_binary_rejects_page_over_999);
     RUN_TEST(test_master_hv_data_rejects_page_over_999);
+    RUN_TEST(test_master_acknowledge_present);
+    RUN_TEST(test_master_acknowledge_absent_on_timeout);
+    RUN_TEST(test_master_query_address_cmd);
+    RUN_TEST(test_master_change_address_ok);
+    RUN_TEST(test_master_change_address_refused);
+    RUN_TEST(test_master_start_measurement_m);
+    RUN_TEST(test_master_start_measurement_mc_group);
+    RUN_TEST(test_master_start_measurement_concurrent);
+    RUN_TEST(test_master_verify_cmd);
+    RUN_TEST(test_master_continuous_values);
+    RUN_TEST(test_master_continuous_crc_verified);
+    RUN_TEST(test_master_wait_service_request_ok);
+    RUN_TEST(test_master_wait_service_request_wrong_address);
+    RUN_TEST(test_master_extended_roundtrip);
+    RUN_TEST(test_master_extended_multiline_two_lines);
+    RUN_TEST(test_master_identify_measurement_metadata);
+    RUN_TEST(test_master_identify_param_metadata);
+    RUN_TEST(test_master_get_hv_data_raw);
+    RUN_TEST(test_master_get_hv_data_wrong_address_rejected);
+    RUN_TEST(test_master_send_break_invokes_callback);
+    RUN_TEST(test_master_bintype_sizes);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);

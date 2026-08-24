@@ -242,6 +242,8 @@ static char   m_last_cmd[64];
 static char   m_reply[128];
 static size_t m_reply_len;
 static size_t m_reply_pos;
+static bool   m_line_mode;    /* recv returns at most one line per call */
+static int    m_break_count;
 
 static void m_send(const char *data, size_t len, void *user_data)
 {
@@ -259,17 +261,28 @@ static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data
     (void)timeout_ms; (void)user_data;
     size_t remain = m_reply_len - m_reply_pos;
     size_t n = remain < max ? remain : max;
+    if (m_line_mode) {
+        /* Emulate a newline-terminated read: stop after the first LF */
+        for (size_t i = 0; i < n; i++) {
+            if (m_reply[m_reply_pos + i] == '\n') { n = i + 1; break; }
+        }
+    }
     memcpy(buf, m_reply + m_reply_pos, n);
     m_reply_pos += n;
     return n;
 }
 
 static void m_dir(sdi12_dir_t dir, void *user_data) { (void)dir; (void)user_data; }
-static void m_brk(void *user_data)                  { (void)user_data; }
+static void m_brk(void *user_data)                  { (void)user_data; m_break_count++; }
 static void m_dly(uint32_t ms, void *user_data)     { (void)ms; (void)user_data; }
 
 static sdi12_master_ctx_t make_scripted_master(void)
 {
+    m_reply_len = m_reply_pos = 0;
+    m_line_mode = false;
+    m_break_count = 0;
+    m_last_cmd[0] = '\0';
+
     sdi12_master_ctx_t m;
     sdi12_master_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
@@ -471,4 +484,264 @@ void test_master_hv_binary_wrong_address_rejected(void)
         &m, '0', 0, &type, out, &out_len);
 
     TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS, err);
+}
+
+/* ── Command Coverage: Acknowledge / Address family ─────────────────────── */
+
+void test_master_acknowledge_present(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");
+
+    bool present = false;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_acknowledge(&m, '0', &present));
+    TEST_ASSERT_TRUE(present);
+    TEST_ASSERT_EQUAL_STRING("0!", m_last_cmd);
+}
+
+void test_master_acknowledge_absent_on_timeout(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    /* no reply queued — recv returns 0 (timeout) */
+
+    bool present = true;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_acknowledge(&m, '0', &present));
+    TEST_ASSERT_FALSE(present);
+}
+
+void test_master_query_address_cmd(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("5\r\n");
+
+    char addr = '?';
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_query_address(&m, &addr));
+    TEST_ASSERT_EQUAL_CHAR('5', addr);
+    TEST_ASSERT_EQUAL_STRING("?!", m_last_cmd);
+}
+
+void test_master_change_address_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("5\r\n");  /* sensor echoes the NEW address */
+
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_change_address(&m, '0', '5'));
+    TEST_ASSERT_EQUAL_STRING("0A5!", m_last_cmd);
+}
+
+void test_master_change_address_refused(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");  /* sensor kept its old address */
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS,
+                      sdi12_master_change_address(&m, '0', '5'));
+}
+
+/* ── Command Coverage: Measurement family ───────────────────────────────── */
+
+void test_master_start_measurement_m(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("00129\r\n");  /* addr 0, ttt 012, n 9 */
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_STANDARD, 0, false, &r));
+    TEST_ASSERT_EQUAL_STRING("0M!", m_last_cmd);
+    TEST_ASSERT_EQUAL(12, r.wait_seconds);
+    TEST_ASSERT_EQUAL(9, r.value_count);
+}
+
+void test_master_start_measurement_mc_group(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("00003\r\n");
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_STANDARD, 2, true, &r));
+    TEST_ASSERT_EQUAL_STRING("0MC2!", m_last_cmd);
+}
+
+void test_master_start_measurement_concurrent(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("000210\r\n");  /* addr 0, ttt 002, nn 10 */
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_CONCURRENT, 0, false, &r));
+    TEST_ASSERT_EQUAL_STRING("0C!", m_last_cmd);
+    TEST_ASSERT_EQUAL(2, r.wait_seconds);
+    TEST_ASSERT_EQUAL(10, r.value_count);
+}
+
+void test_master_verify_cmd(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("00001\r\n");
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_verify(&m, '0', &r));
+    TEST_ASSERT_EQUAL_STRING("0V!", m_last_cmd);
+    TEST_ASSERT_EQUAL(1, r.value_count);
+}
+
+void test_master_continuous_values(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0+1.5-2.5\r\n");
+
+    sdi12_data_response_t d;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_continuous(&m, '0', 3, false, &d));
+    TEST_ASSERT_EQUAL_STRING("0R3!", m_last_cmd);
+    TEST_ASSERT_EQUAL(2, d.value_count);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.5f, d.values[0].value);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, -2.5f, d.values[1].value);
+}
+
+void test_master_continuous_crc_verified(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    char reply[64] = "0+7.25";
+    sdi12_crc_append(reply, sizeof(reply));
+    set_reply(reply);
+
+    sdi12_data_response_t d;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_continuous(&m, '0', 0, true, &d));
+    TEST_ASSERT_EQUAL_STRING("0RC0!", m_last_cmd);
+    TEST_ASSERT_TRUE(d.crc_valid);
+    TEST_ASSERT_EQUAL(1, d.value_count);
+}
+
+void test_master_wait_service_request_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");
+
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_wait_service_request(&m, '0', 1000));
+}
+
+void test_master_wait_service_request_wrong_address(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("5\r\n");  /* another sensor raised the request */
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_TIMEOUT,
+                      sdi12_master_wait_service_request(&m, '0', 1000));
+}
+
+/* ── Command Coverage: Extended commands ────────────────────────────────── */
+
+void test_master_extended_roundtrip(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0OK\r\n");
+
+    char out[32];
+    size_t out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_extended(
+        &m, '0', "TEST", out, &out_len, 1000));
+    TEST_ASSERT_EQUAL_STRING("0XTEST!", m_last_cmd);
+    TEST_ASSERT_EQUAL(5, out_len);          /* "0OK\r\n" */
+    TEST_ASSERT_EQUAL_INT(0, memcmp("0OK\r\n", out, 5));
+}
+
+void test_master_extended_multiline_two_lines(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0L1\r\n0L2\r\n");
+    m_line_mode = true;   /* recv returns one line per call */
+
+    char out[64];
+    size_t out_len = sizeof(out);
+    uint8_t lines = 0;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_extended_multiline(
+        &m, '0', "DUMP", out, sizeof(out), &out_len, &lines, 1000));
+    TEST_ASSERT_EQUAL_STRING("0XDUMP!", m_last_cmd);
+    TEST_ASSERT_EQUAL(2, lines);
+    TEST_ASSERT_EQUAL(10, out_len);
+    TEST_ASSERT_EQUAL_INT(0, memcmp("0L1\r\n0L2\r\n", out, 10));
+}
+
+/* ── Command Coverage: Identify metadata ────────────────────────────────── */
+
+void test_master_identify_measurement_metadata(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("00059\r\n");  /* ttt 005, n 9 */
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_identify_measurement(
+        &m, '0', "M", SDI12_MEAS_STANDARD, &r));
+    TEST_ASSERT_EQUAL_STRING("0IM!", m_last_cmd);
+    TEST_ASSERT_EQUAL(5, r.wait_seconds);
+    TEST_ASSERT_EQUAL(9, r.value_count);
+}
+
+void test_master_identify_param_metadata(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0,TA,degC;\r\n");
+
+    sdi12_param_meta_response_t r;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_identify_param(
+        &m, '0', "M", 1, &r));
+    TEST_ASSERT_EQUAL_STRING("0IM_001!", m_last_cmd);
+    TEST_ASSERT_EQUAL_STRING("TA", r.shef);
+    TEST_ASSERT_EQUAL_STRING("degC", r.units);
+}
+
+/* ── Command Coverage: High-volume ASCII, break, bintype ────────────────── */
+
+void test_master_get_hv_data_raw(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0+1+2+3\r\n");
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_get_hv_data(&m, '0', 42, raw, &raw_len));
+    TEST_ASSERT_EQUAL_STRING("0D42!", m_last_cmd);
+    TEST_ASSERT_EQUAL(6, raw_len);
+    TEST_ASSERT_EQUAL_INT(0, memcmp("+1+2+3", raw, 6));
+}
+
+void test_master_get_hv_data_wrong_address_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("5+1+2\r\n");  /* response from a different sensor */
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS,
+                      sdi12_master_get_hv_data(&m, '0', 0, raw, &raw_len));
+}
+
+void test_master_send_break_invokes_callback(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_send_break(&m));
+    TEST_ASSERT_EQUAL(1, m_break_count);
+}
+
+void test_master_bintype_sizes(void)
+{
+    TEST_ASSERT_EQUAL(1, sdi12_bintype_size(SDI12_BINTYPE_INT8));
+    TEST_ASSERT_EQUAL(1, sdi12_bintype_size(SDI12_BINTYPE_UINT8));
+    TEST_ASSERT_EQUAL(2, sdi12_bintype_size(SDI12_BINTYPE_INT16));
+    TEST_ASSERT_EQUAL(2, sdi12_bintype_size(SDI12_BINTYPE_UINT16));
+    TEST_ASSERT_EQUAL(4, sdi12_bintype_size(SDI12_BINTYPE_INT32));
+    TEST_ASSERT_EQUAL(4, sdi12_bintype_size(SDI12_BINTYPE_UINT32));
+    TEST_ASSERT_EQUAL(8, sdi12_bintype_size(SDI12_BINTYPE_INT64));
+    TEST_ASSERT_EQUAL(8, sdi12_bintype_size(SDI12_BINTYPE_UINT64));
+    TEST_ASSERT_EQUAL(4, sdi12_bintype_size(SDI12_BINTYPE_FLOAT32));
+    TEST_ASSERT_EQUAL(8, sdi12_bintype_size(SDI12_BINTYPE_FLOAT64));
+    TEST_ASSERT_EQUAL(0, sdi12_bintype_size((sdi12_bintype_t)0));
+    TEST_ASSERT_EQUAL(0, sdi12_bintype_size((sdi12_bintype_t)99));
 }
