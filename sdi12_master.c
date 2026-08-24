@@ -780,24 +780,14 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     err = recv_exact(ctx, tail, tail_len, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
-    /* Verify CRC: computed over addr + pkt_size(2) + type(1) + payload(N) */
-    size_t crc_data_len = 4 + (size_t)pkt_size;
-
-    /* Assemble contiguous CRC input into resp_buf for computation.
-     * Total ≤ 4 + 1000 = 1004 which exceeds resp_buf.  Use a different
-     * approach: compute CRC incrementally over hdr(3) + type(1) + payload. */
+    /* Verify CRC: computed over addr + pkt_size(2) + type(1) + payload(N).
+     * Incremental over the pieces already in hand — no assembly buffer,
+     * which would otherwise double the stack cost of tail[]. */
     {
-        /* Compute CRC over header bytes + type byte + payload bytes */
-        uint16_t crc = 0;
-        /* We need a contiguous buffer.  Build one from the pieces: */
-        /* For small payloads (our typical case), stack is fine. */
-        uint8_t crc_buf[SDI12_BIN_MAX_PAYLOAD + SDI12_BIN_PKT_OVERHEAD];
-        memcpy(crc_buf, hdr, 3);
-        crc_buf[3] = (uint8_t)type_byte;
-        if (pkt_size > 0)
-            memcpy(crc_buf + 4, tail, pkt_size);
-
-        crc = sdi12_crc16(crc_buf, crc_data_len);
+        uint16_t crc = 0x0000;
+        crc = sdi12_crc16_update(crc, hdr, 3);
+        crc = sdi12_crc16_update(crc, &type_byte, 1);
+        crc = sdi12_crc16_update(crc, tail, pkt_size);
 
         uint16_t received_crc = (uint8_t)tail[pkt_size] |
                                 ((uint16_t)(uint8_t)tail[pkt_size + 1] << 8);

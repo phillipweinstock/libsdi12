@@ -19,10 +19,9 @@
  *       if (CRC & 1): CRC = (CRC >> 1) ^ 0xA001
  *       else:          CRC >>= 1
  */
-uint16_t sdi12_crc16(const void *data, size_t len)
+uint16_t sdi12_crc16_update(uint16_t crc, const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
-    uint16_t crc = 0x0000;
 
     for (size_t i = 0; i < len; i++) {
         crc ^= (uint16_t)p[i];
@@ -35,6 +34,11 @@ uint16_t sdi12_crc16(const void *data, size_t len)
         }
     }
     return crc;
+}
+
+uint16_t sdi12_crc16(const void *data, size_t len)
+{
+    return sdi12_crc16_update(0x0000, data, len);
 }
 
 void sdi12_crc_encode_ascii(uint16_t crc, char out[4])

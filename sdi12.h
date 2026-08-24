@@ -325,6 +325,19 @@ static inline bool sdi12_valid_address(char c) {
 uint16_t sdi12_crc16(const void *data, size_t len);
 
 /**
+ * @brief Continue a CRC-16 computation over another chunk of data.
+ *
+ * Feed 0x0000 as the initial value; chain the return through successive
+ * chunks. sdi12_crc16(d, n) == sdi12_crc16_update(0, d, n).
+ *
+ * @param crc  Running CRC value.
+ * @param data Pointer to next chunk.
+ * @param len  Number of bytes in this chunk.
+ * @return Updated CRC value.
+ */
+uint16_t sdi12_crc16_update(uint16_t crc, const void *data, size_t len);
+
+/**
  * @brief Encode a 16-bit CRC into 3 ASCII characters per SDI-12 spec.
  *
  * Each 6-bit group is OR'd with 0x40 to produce a printable character.

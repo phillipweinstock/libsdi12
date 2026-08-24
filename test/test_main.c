@@ -38,6 +38,7 @@ extern void test_crc_verify_corrupt_data(void);
 extern void test_crc_verify_corrupt_crc(void);
 extern void test_crc_verify_too_short(void);
 extern void test_crc_roundtrip_various(void);
+extern void test_crc16_update_matches_one_shot(void);
 
 /* test_address.c */
 extern void test_valid_digits(void);
@@ -183,6 +184,7 @@ int main(void)
     RUN_TEST(test_crc_verify_corrupt_crc);
     RUN_TEST(test_crc_verify_too_short);
     RUN_TEST(test_crc_roundtrip_various);
+    RUN_TEST(test_crc16_update_matches_one_shot);
 
     /* ── Address Validation ─────────────────────────────────────────────── */
     RUN_TEST(test_valid_digits);

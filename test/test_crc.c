@@ -184,3 +184,22 @@ void test_crc_roundtrip_various(void)
         TEST_ASSERT_TRUE(sdi12_crc_verify(buf, strlen(buf)));
     }
 }
+
+/* ── Incremental CRC ────────────────────────────────────────────────────── */
+
+void test_crc16_update_matches_one_shot(void)
+{
+    const char *msg = "0+1.23+4.56-7.89 incremental pieces";
+    size_t len = strlen(msg);
+    uint16_t whole = sdi12_crc16(msg, len);
+
+    /* Same data fed in three uneven pieces must give the same CRC */
+    uint16_t inc = 0x0000;
+    inc = sdi12_crc16_update(inc, msg, 3);
+    inc = sdi12_crc16_update(inc, msg + 3, 1);
+    inc = sdi12_crc16_update(inc, msg + 4, len - 4);
+    TEST_ASSERT_EQUAL_HEX16(whole, inc);
+
+    /* Zero-length update is a no-op */
+    TEST_ASSERT_EQUAL_HEX16(inc, sdi12_crc16_update(inc, msg, 0));
+}
