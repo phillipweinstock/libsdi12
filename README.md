@@ -13,7 +13,7 @@ recorder)** roles — with zero external dependencies.
   lines, master in 3
 - ✅ **Pure C11, no `malloc`** — all state lives in user-allocated context
   structs; UART, GPIO, and timing are abstracted behind callbacks
-- ✅ **114 tests** — unit + metamorphic/property-based, all runnable on
+- ✅ **165 tests** — unit + metamorphic/property-based, all runnable on
   desktop with no hardware and no external test framework
 - ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
   MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
@@ -43,8 +43,8 @@ recorder)** roles — with zero external dependencies.
 | `aV!` | Verification | ✅ | ✅ |
 | `aAb!` | Change address | ✅ | ✅ |
 | `aX…!` | Extended commands | ✅ | ✅ |
-| `aHA!` / `aHAC!` | High-volume ASCII | ✅ | ✅ |
-| `aHB!` / `aHBC!` | High-volume binary | ✅¹ | ✅ |
+| `aHA!` | High-volume ASCII (pages always CRC-protected) | ✅ | ✅ |
+| `aHB!` | High-volume binary | ✅¹ | ✅ |
 | `aIM!` `aIC!` `aIM_nnn!` … | Metadata / parameter identification | ✅ | ✅ |
 | CRC-16-IBM | Compute, append, verify | ✅ | ✅ |
 | Break signal | Detect / send | ✅ | ✅ |
@@ -66,7 +66,7 @@ by the library.
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 114 tests | ❌ | Minimal |
+| Test suite | 165 tests | ❌ | Minimal |
 
 ---
 
@@ -274,6 +274,7 @@ sdi12_sensor_break(&ctx);
 | `save_address` / `load_address` | Persist address to flash/EEPROM across power cycles |
 | `start_measurement` | Begin an async measurement; return `ttt` seconds (NULL = synchronous) |
 | `service_request` | Custom service-request transmit (NULL = uses `send_response`) |
+| `meas_duration` | Expected `ttt` for `aIM!`-family metadata (NULL = reports 000; async sensors should provide it) |
 | `format_binary_page` | Manufacturer-defined binary encoding for `aHB!` / `aDBn!` pages |
 
 ### Extended Commands
@@ -477,13 +478,13 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-**114 tests** run on desktop with no hardware and no external framework —
+**165 tests** run on desktop with no hardware and no external framework —
 the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 114 Tests 0 Failures
+./test_sdi12    # 165 Tests 0 Failures
 ```
 
 | Suite | Tests | What It Covers |

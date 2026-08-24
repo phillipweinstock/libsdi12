@@ -1,6 +1,6 @@
 # Testing libsdi12
 
-libsdi12 ships with **114 tests** across 5 categories, all runnable on desktop
+libsdi12 ships with **165 tests** across 5 categories, all runnable on desktop
 without any hardware, SDI-12 bus, or external test framework.
 
 ---
@@ -25,7 +25,7 @@ Output:
   PASS: test_meta_parse_meas_address_passthrough
 
 -----------------------
-114 Tests 0 Failures 0 Ignored
+165 Tests 0 Failures 0 Ignored
 OK
 ```
 

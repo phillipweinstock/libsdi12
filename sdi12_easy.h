@@ -200,7 +200,7 @@ extern "C" {
  * @param group     Measurement group (0 = aM!/aC!, 1–9 = aM1!/aC1!, …).
  * @param shef      SHEF code string, e.g. "TA".
  * @param units     Units string, e.g. "degC".
- * @param decimals  Decimal places (0–7).
+ * @param decimals  Decimal places (0–6; higher values clamp to 6).
  */
 #define SDI12_SENSOR_ADD_PARAM(name, group, shef, units, decimals) \
     sdi12_sensor_register_param(&name##_ctx, (group), (shef), (units), (decimals))
