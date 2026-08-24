@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run test suite
+        run: make -C test CC=${{ matrix.cc }}
+
+  sanitize:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run under sanitizers
+        run: >
+          make -C test
+          CFLAGS="-std=c11 -Wall -Wextra -O1 -g -I..
+          -fsanitize=address,undefined -fsanitize=float-cast-overflow
+          -fno-sanitize-recover=all"
+        env:
+          ASAN_OPTIONS: strict_string_checks=1:detect_stack_use_after_return=1
+
+  strict-warnings:
+    name: -Werror strict flags
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Library sources compile warning-free
+        run: >
+          gcc -std=c11 -Werror -Wall -Wextra -Wpedantic -Wconversion
+          -Wshadow -Wcast-qual -Wstrict-prototypes -Wformat=2
+          -O2 -fsyntax-only sdi12_crc.c sdi12_sensor.c sdi12_master.c
+      - name: Examples compile warning-free
+        run: |
+          for f in examples/*.c; do
+            gcc -std=c11 -Werror -Wall -Wextra -I. -fsyntax-only "$f"
+          done
+
+  cmake:
+    name: CMake build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build

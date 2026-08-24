@@ -859,7 +859,7 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
                 uint16_t page = 0;
                 for (size_t i = 3; i < cmdlen; i++) {
                     if (cmd[i] >= '0' && cmd[i] <= '9')
-                        page = page * 10 + (uint16_t)(cmd[i] - '0');
+                        page = (uint16_t)(page * 10 + (cmd[i] - '0'));
                     else
                         break;
                 }
@@ -869,7 +869,7 @@ sdi12_err_t sdi12_sensor_process(sdi12_sensor_ctx_t *ctx,
             uint16_t page = 0;
             for (size_t i = 2; i < cmdlen; i++) {
                 if (cmd[i] >= '0' && cmd[i] <= '9') {
-                    page = page * 10 + (uint16_t)(cmd[i] - '0');
+                    page = (uint16_t)(page * 10 + (cmd[i] - '0'));
                 } else {
                     break;
                 }
