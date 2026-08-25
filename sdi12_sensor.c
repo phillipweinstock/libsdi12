@@ -48,6 +48,8 @@ static uint8_t collect_group_indices(const sdi12_sensor_ctx_t *ctx,
 /** Largest magnitude a data value can carry: 7 digits per §4.4.8 Table 11. */
 #define SDI12_VALUE_LIMIT 9999999.0f
 
+static bool identify_well_formed(const char *cmd, size_t cmdlen);
+
 /**
  * Format a single value with mandatory sign prefix per SDI-12 spec.
  *
@@ -196,11 +198,17 @@ static void send_response(sdi12_sensor_ctx_t *ctx)
     }
 }
 
-/** Populate data cache synchronously by reading all params in a group. */
-static void read_group_sync(sdi12_sensor_ctx_t *ctx, uint8_t group)
+/** Populate data cache synchronously by reading params in a group.
+ *  `limit` is the command family's value-count cap (9 for M/V, 99 for
+ *  C, 999 for HV): the D pages must deliver exactly the count the
+ *  measurement response promised, so over-registered params beyond the
+ *  reportable count are not cached. */
+static void read_group_sync(sdi12_sensor_ctx_t *ctx, uint8_t group,
+                            uint16_t limit)
 {
     uint8_t indices[SDI12_MAX_PARAMS];
     uint8_t n = collect_group_indices(ctx, group, indices, SDI12_MAX_PARAMS);
+    if (n > limit) n = (uint8_t)limit;
 
     ctx->data_cache_count = 0;
     for (uint8_t i = 0; i < n && ctx->data_cache_count < SDI12_MAX_PARAMS; i++) {
@@ -249,6 +257,9 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
     ctx->pending_meas_group = group;
 
     uint8_t n = count_group(ctx, group);
+    uint16_t family_max = (type == SDI12_MEAS_STANDARD ||
+                           type == SDI12_MEAS_VERIFICATION) ? 9u
+                        : (type == SDI12_MEAS_CONCURRENT)   ? 99u : 999u;
 
     /* If sensor has no data for this group, respond with zero.
      * §5.4: high-volume commands answer in the atttnnn form.
@@ -295,13 +306,13 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
 
         if (ttt == 0) {
             /* Synchronous — read now */
-            read_group_sync(ctx, group);
+            read_group_sync(ctx, group, family_max);
         } else {
             ctx->data_available = false;
         }
     } else {
         /* No async callback — synchronous measurement (ttt = 0) */
-        read_group_sync(ctx, group);
+        read_group_sync(ctx, group, family_max);
 
         if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
             snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
@@ -352,12 +363,24 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
      *   buf[1] = type byte
      *   buf[2..] = raw payload bytes
      *   returns number of bytes written starting at buf[1] (type + payload)
+     *
+     * The buflen handed to the callback is HONEST: addr + type + the
+     * payload that actually fits the outgoing packet. Handing it the
+     * raw buffer size and clamping afterwards silently truncated the
+     * payload while still computing a valid CRC over the truncation —
+     * undetectable data loss on the recorder side.
      */
+    size_t max_payload = sizeof(ctx->resp_buf) - SDI12_BIN_PKT_OVERHEAD;
+    if (max_payload > SDI12_BIN_MAX_PAYLOAD)
+        max_payload = SDI12_BIN_MAX_PAYLOAD;
+
     char tmpbuf[SDI12_MAX_RESPONSE_LEN];
     tmpbuf[0] = ctx->address;
+    size_t cb_buflen = 2 + max_payload;   /* addr + type + payload */
+    if (cb_buflen > sizeof(tmpbuf)) cb_buflen = sizeof(tmpbuf);
     size_t cb_bytes = ctx->cb.format_binary_page(
         page, ctx->data_cache, ctx->data_cache_count,
-        tmpbuf, sizeof(tmpbuf), ctx->cb.user_data);
+        tmpbuf, cb_buflen, ctx->cb.user_data);
 
     if (cb_bytes == 0) {
         /* Empty page */
@@ -373,22 +396,25 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
         return SDI12_OK;
     }
 
-    /* cb_bytes = type(1) + raw_data(N), so payload_size = cb_bytes - 1 */
-    if (cb_bytes > sizeof(tmpbuf) - 1)
-        cb_bytes = sizeof(tmpbuf) - 1;
+    /* cb_bytes = type(1) + raw_data(N), so payload_size = cb_bytes - 1.
+     * A callback exceeding its honest buflen violates the contract —
+     * answer with the invalid-request packet (type 0, Table 15) rather
+     * than silently truncating under a valid CRC. */
+    if (cb_bytes > cb_buflen - 1) {
+        pkt[0] = ctx->address;
+        pkt[1] = 0x00;
+        pkt[2] = 0x00;
+        pkt[3] = 0x00;
+        uint16_t ecrc = sdi12_crc16(pkt, 4);
+        pkt[4] = (char)(ecrc & 0xFF);
+        pkt[5] = (char)((ecrc >> 8) & 0xFF);
+        ctx->resp_len = 6;
+        send_response(ctx);
+        return SDI12_ERR_BUFFER_OVERFLOW;
+    }
 
     uint8_t data_type = (uint8_t)tmpbuf[1];
     uint16_t payload_size = (uint16_t)(cb_bytes - 1);
-
-    /* The full packet (addr + size + type + payload + CRC) must fit the
-     * response buffer — clamp the payload so the CRC never lands past it.
-     * Also enforce the spec's 1000-byte per-packet payload cap (§5.2
-     * Table 14), which matters when SDI12_MAX_RESPONSE_LEN is enlarged. */
-    size_t max_payload = sizeof(ctx->resp_buf) - SDI12_BIN_PKT_OVERHEAD;
-    if (max_payload > SDI12_BIN_MAX_PAYLOAD)
-        max_payload = SDI12_BIN_MAX_PAYLOAD;
-    if (payload_size > max_payload)
-        payload_size = (uint16_t)max_payload;
 
     /* Build binary packet: addr + pkt_size(2 LE) + type + payload + CRC(2 LE) */
     pkt[0] = ctx->address;
@@ -540,8 +566,11 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
      *   aIR0_nnn! → a,SHEF,units;
      */
 
-    /* cmd[0] = address, cmd[1] = 'I', cmd[2+] = subcommand */
+    /* cmd[0] = address, cmd[1] = 'I', cmd[2+] = subcommand.
+     * One grammar shared with the concurrent-abort gate: forms not in
+     * Table 19/20 (aIZ_nnn!, aI_nnn!, aIH_nnn!, ...) get silence. */
     if (len < 3) return SDI12_ERR_INVALID_COMMAND;
+    if (!identify_well_formed(cmd, len)) return SDI12_ERR_INVALID_COMMAND;
 
     char subcmd = cmd[2];
 
@@ -771,6 +800,9 @@ sdi12_err_t sdi12_sensor_init(sdi12_sensor_ctx_t *ctx,
     memset(ctx, 0, sizeof(*ctx));
     ctx->address = address;
     ctx->ident = *ident;
+    /* Defensive: a caller filling all serial bytes without a NUL would
+     * otherwise over-read into adjacent context fields when printed */
+    ctx->ident.serial[SDI12_ID_SERIAL_MAXLEN] = 0;
     ctx->cb = *callbacks;
     ctx->state = SDI12_STATE_READY;
 
@@ -826,6 +858,58 @@ sdi12_err_t sdi12_sensor_register_xcmd(sdi12_sensor_ctx_t *ctx,
     return SDI12_OK;
 }
 
+/** Grammar for the identify-measurement family (Table 19 / Table 20):
+ *  aI!, aIM/aIMC[1-9]!, aIC/aICC[1-9]!, aIV!, aIHA!, aIHB!, plus the
+ *  parameter forms with '_' and exactly three digits. Shared by the
+ *  dispatcher and the concurrent-abort gate so they can never disagree. */
+static bool identify_well_formed(const char *cmd, size_t cmdlen)
+{
+    if (cmdlen == 2) return true;               /* aI! */
+    if (cmdlen < 3) return false;
+
+    /* Split off an optional _nnn suffix (exactly three digits) */
+    size_t body_end = cmdlen;
+    const char *us = (const char *)memchr(cmd + 2, '_', cmdlen - 2);
+    if (us) {
+        size_t upos = (size_t)(us - cmd);
+        if (cmdlen - upos != 4) return false;   /* '_' + 3 digits */
+        for (size_t i = upos + 1; i < cmdlen; i++)
+            if (cmd[i] < '0' || cmd[i] > '9') return false;
+        body_end = upos;
+    }
+
+    /* Validate the family between 'I' and the suffix/end */
+    size_t blen = body_end - 2;                 /* chars after 'I' */
+    const char *b = cmd + 2;
+    if (blen == 0) return false;
+
+    switch (b[0]) {
+    case 'M': case 'C': {
+        size_t p = 1;
+        if (p < blen && b[p] == 'C') p++;
+        if (p < blen && b[p] >= '1' && b[p] <= '9') p++;
+        return p == blen;
+    }
+    case 'V':
+        return blen == 1;
+    case 'H':
+        return blen == 2 && (b[1] == 'A' || b[1] == 'B');
+    case 'R':
+        /* Table 19 has no aIR summary; Table 20 has aIR0_nnn!/aIRC0_nnn! —
+         * i.e. the R forms are only valid WITH the parameter suffix. */
+        if (!us) return false;
+        {
+            size_t p = 1;
+            if (p < blen && b[p] == 'C') p++;
+            if (p < blen && b[p] >= '0' && b[p] <= '9') p++;
+            else return false;
+            return p == blen;
+        }
+    default:
+        return false;
+    }
+}
+
 /** Structural grammar check for an address-stripped-'!' command.
  *  Mirrors the dispatcher's per-family rules; used to gate the
  *  concurrent-measurement abort so malformed bus noise cannot abort
@@ -836,7 +920,7 @@ static bool command_well_formed(const char *cmd, size_t cmdlen)
 
     switch (cmd[1]) {
     case 'I':
-        return true;    /* aI! + metadata family (detail-checked later) */
+        return identify_well_formed(cmd, cmdlen);
     case 'M': case 'C': {
         bool crc = (cmdlen > 2 && cmd[2] == 'C');
         size_t dp = crc ? 3 : 2;
@@ -844,7 +928,10 @@ static bool command_well_formed(const char *cmd, size_t cmdlen)
         return cmdlen == dp + (dig ? 1u : 0u);
     }
     case 'V': return cmdlen == 2;
-    case 'A': return cmdlen == 3 && isprint((unsigned char)cmd[2]);
+    case 'A':
+        /* Mirrors the dispatcher: interior '!' makes it malformed */
+        return cmdlen == 3 && cmd[2] != '!' &&
+               isprint((unsigned char)cmd[2]);
     case 'H': return cmdlen == 3 && (cmd[2] == 'A' || cmd[2] == 'B');
     case 'R': {
         bool crc = (cmdlen > 2 && cmd[2] == 'C');
@@ -855,11 +942,17 @@ static bool command_well_formed(const char *cmd, size_t cmdlen)
     case 'D': {
         size_t i = (cmdlen > 2 && cmd[2] == 'B') ? 3 : 2;
         if (i >= cmdlen) return false;
-        for (; i < cmdlen; i++)
+        uint16_t page = 0;
+        for (; i < cmdlen; i++) {
             if (cmd[i] < '0' || cmd[i] > '9') return false;
+            page = (uint16_t)(page * 10 + (cmd[i] - '0'));
+            if (page > 999) return false;   /* mirrors dispatcher bound */
+        }
         return true;
     }
-    case 'X': return cmdlen > 2;
+    /* Mirrors the dispatcher: bare aX! gets the fail-safe bare-address
+     * response, so it counts as answered/valid */
+    case 'X': return cmdlen >= 2;
     default:  return false;
     }
 }
@@ -1032,9 +1125,17 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
         return SDI12_ERR_INVALID_COMMAND;
     }
 
-    /* Store the values in the cache */
+    /* Store the values in the cache — capped at what the pending
+     * measurement command could have promised (9/99/999), so the D
+     * pages never deliver more values than the response declared. */
+    uint16_t family_max = (ctx->pending_meas_type == SDI12_MEAS_STANDARD ||
+                           ctx->pending_meas_type == SDI12_MEAS_VERIFICATION)
+                          ? 9u
+                        : (ctx->pending_meas_type == SDI12_MEAS_CONCURRENT)
+                          ? 99u : 999u;
     uint8_t n = count;
     if (n > SDI12_MAX_PARAMS) n = SDI12_MAX_PARAMS;
+    if (n > family_max) n = (uint8_t)family_max;
     if (n > 0) memcpy(ctx->data_cache, values, n * sizeof(sdi12_value_t));
     ctx->data_cache_count = n;
     ctx->data_available = true;

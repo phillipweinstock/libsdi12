@@ -55,8 +55,13 @@ extern "C" {
 /** Maximum data pages for high-volume commands. */
 #define SDI12_MAX_HV_DATA_PAGES 1000
 
-/** Maximum binary data payload per §5.2 (bytes). */
+/** Maximum binary data payload per §5.2 (bytes). Override at compile
+ *  time (-DSDI12_BIN_MAX_PAYLOAD=NN) to shrink the master's receive
+ *  buffers on RAM-constrained targets; both peers must agree on packet
+ *  sizes regardless. */
+#ifndef SDI12_BIN_MAX_PAYLOAD
 #define SDI12_BIN_MAX_PAYLOAD 1000
+#endif
 
 /** Binary packet overhead: addr(1) + pkt_size(2) + type(1) + CRC(2). */
 #define SDI12_BIN_PKT_OVERHEAD 6
@@ -143,7 +148,13 @@ extern "C" {
 /** Max sensor response time after command stop bit. */
 #define SDI12_RESPONSE_TIMEOUT_MS  15
 
-/** Max inter-character gap within a message. */
+/** Max inter-character gap within a message, in microseconds.
+ *  §7.0 gives 1.66 ms with NO tolerance — use this for enforcement. */
+#define SDI12_INTERCHAR_MAX_US  1660
+
+/** Millisecond-rounded variant. Rounded UP, so suitable only as a
+ *  sender-side delay budget — as an enforcement limit it would loosen
+ *  a no-tolerance maximum by 0.34 ms; use SDI12_INTERCHAR_MAX_US. */
 #define SDI12_INTERCHAR_MAX_MS  2  /* 1.66 ms rounded up */
 
 /** Marking duration after which break is required. */
@@ -357,21 +368,6 @@ void sdi12_crc_encode_ascii(uint16_t crc, char out[4]);
  * @return SDI12_OK on success, SDI12_ERR_BUFFER_OVERFLOW if insufficient room.
  */
 sdi12_err_t sdi12_crc_append(char *buf, size_t buflen);
-
-/**
- * @brief Compute and append CRC to a response buffer with explicit data length.
- *
- * Like sdi12_crc_append() but uses an explicit data length instead of strlen(),
- * making it safe for binary payloads that may contain null bytes.
- * The CRC is computed over buf[0..data_len-1] and inserted before CR/LF.
- *
- * @param buf       Response buffer.
- * @param data_len  Exact number of data bytes — never adjusted; unlike
- *                  sdi12_crc_append(), trailing CR/LF bytes are treated as data.
- * @param buflen    Total buffer capacity.
- * @return SDI12_OK on success, SDI12_ERR_BUFFER_OVERFLOW if insufficient room.
- */
-sdi12_err_t sdi12_crc_append_n(char *buf, size_t data_len, size_t buflen);
 
 /**
  * @brief Verify CRC on a received response string.

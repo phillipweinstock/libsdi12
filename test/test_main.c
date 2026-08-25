@@ -127,6 +127,10 @@ extern void test_sensor_xcmd_handler_gets_clean_string(void);
 extern void test_sensor_change_address_invalid_target_echoes_original(void);
 extern void test_sensor_metadata_param_number_must_be_three_digits(void);
 extern void test_sensor_format_locale_independent(void);
+extern void test_sensor_gate_matches_dispatcher_for_i_and_d(void);
+extern void test_sensor_metadata_requires_valid_family(void);
+extern void test_sensor_group_overflow_serves_promised_count(void);
+extern void test_sensor_binary_callback_buflen_is_honest(void);
 
 /* test_master.c */
 extern void test_parse_meas_m_basic(void);
@@ -191,6 +195,13 @@ extern void test_master_start_measurement_timeout_zeroes_resp(void);
 extern void test_master_parse_meas_sets_type(void);
 extern void test_master_hv_binary_oversized_packet_drained(void);
 extern void test_master_parse_locale_independent(void);
+extern void test_master_hv_data_empty_terminator_ok(void);
+extern void test_master_hv_data_bare_address_ok(void);
+extern void test_master_parse_rejects_double_dot(void);
+extern void test_master_parse_rejects_overlong_value(void);
+extern void test_master_parse_rejects_junk(void);
+extern void test_master_identify_measurement_wrong_address(void);
+extern void test_master_oversized_xcmd_rejected(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -369,6 +380,13 @@ int main(void)
     RUN_TEST(test_master_parse_meas_sets_type);
     RUN_TEST(test_master_hv_binary_oversized_packet_drained);
     RUN_TEST(test_master_parse_locale_independent);
+    RUN_TEST(test_master_hv_data_empty_terminator_ok);
+    RUN_TEST(test_master_hv_data_bare_address_ok);
+    RUN_TEST(test_master_parse_rejects_double_dot);
+    RUN_TEST(test_master_parse_rejects_overlong_value);
+    RUN_TEST(test_master_parse_rejects_junk);
+    RUN_TEST(test_master_identify_measurement_wrong_address);
+    RUN_TEST(test_master_oversized_xcmd_rejected);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);
@@ -424,6 +442,10 @@ int main(void)
     RUN_TEST(test_sensor_change_address_invalid_target_echoes_original);
     RUN_TEST(test_sensor_metadata_param_number_must_be_three_digits);
     RUN_TEST(test_sensor_format_locale_independent);
+    RUN_TEST(test_sensor_gate_matches_dispatcher_for_i_and_d);
+    RUN_TEST(test_sensor_metadata_requires_valid_family);
+    RUN_TEST(test_sensor_group_overflow_serves_promised_count);
+    RUN_TEST(test_sensor_binary_callback_buflen_is_honest);
 
     /* Runs last: a regression here previously segfaulted */
     RUN_TEST(test_sensor_measurement_done_null_values);

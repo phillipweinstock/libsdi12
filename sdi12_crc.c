@@ -79,33 +79,6 @@ sdi12_err_t sdi12_crc_append(char *buf, size_t buflen)
     return SDI12_OK;
 }
 
-sdi12_err_t sdi12_crc_append_n(char *buf, size_t data_len, size_t buflen)
-{
-    /* data_len is explicit and authoritative: unlike sdi12_crc_append()
-     * no trailing CR/LF is stripped — a binary payload legitimately
-     * ending in 0x0D 0x0A would otherwise have two real data bytes
-     * excluded from the CRC and overwritten. */
-    size_t data_end = data_len;
-
-    /* Need room for 3 CRC chars + CR + LF + null */
-    if (data_end + 3 + 2 + 1 > buflen) {
-        return SDI12_ERR_BUFFER_OVERFLOW;
-    }
-
-    uint16_t crc = sdi12_crc16(buf, data_end);
-    char encoded[4];
-    sdi12_crc_encode_ascii(crc, encoded);
-
-    buf[data_end]     = encoded[0];
-    buf[data_end + 1] = encoded[1];
-    buf[data_end + 2] = encoded[2];
-    buf[data_end + 3] = '\r';
-    buf[data_end + 4] = '\n';
-    buf[data_end + 5] = '\0';
-
-    return SDI12_OK;
-}
-
 bool sdi12_crc_verify(const char *buf, size_t len)
 {
     /* Minimum valid: a + 3 CRC + CR + LF = 6 chars */

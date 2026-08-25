@@ -3,7 +3,6 @@ libsdi12.so.0 libsdi12-0 #MINVER#
  sdi12_crc16@Base 0.3.0
  sdi12_crc16_update@Base 0.5.1
  sdi12_crc_append@Base 0.3.0
- sdi12_crc_append_n@Base 0.3.0
  sdi12_crc_encode_ascii@Base 0.3.0
  sdi12_crc_verify@Base 0.3.0
  sdi12_master_acknowledge@Base 0.3.0

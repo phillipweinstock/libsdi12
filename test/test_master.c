@@ -915,3 +915,87 @@ void test_master_parse_locale_independent(void)
     TEST_ASSERT_FLOAT_WITHIN(0.001f, -2.50f, vals[1].value);
     TEST_ASSERT_EQUAL(2, vals[0].decimals);
 }
+
+/* ── Round-3 Cold-Review Batch ──────────────────────────────────────────── */
+
+void test_master_hv_data_empty_terminator_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+
+    /* The spec's own empty HV page: address + CRC of "0" + CRLF.
+     * §5.1 mandates the CRC even on the terminator; §4.4.8.1 shows the
+     * exact form 0AP@<CR><LF>. Must be OK / 0 bytes, not a CRC error. */
+    set_reply("0AP@\r\n");
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_get_hv_data(&m, '0', 3, raw, &raw_len));
+    TEST_ASSERT_EQUAL(0, raw_len);
+}
+
+void test_master_hv_data_bare_address_ok(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");   /* lenient sensor's abort/no-data page */
+
+    char raw[32];
+    size_t raw_len = sizeof(raw);
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_get_hv_data(&m, '0', 0, raw, &raw_len));
+    TEST_ASSERT_EQUAL(0, raw_len);
+}
+
+void test_master_parse_rejects_double_dot(void)
+{
+    sdi12_value_t vals[4];
+    uint8_t count = 0;
+    TEST_ASSERT_EQUAL(SDI12_ERR_PARSE_FAILED,
+        sdi12_master_parse_data_values("+1.2.3", 6, vals, 4, &count, false));
+}
+
+void test_master_parse_rejects_overlong_value(void)
+{
+    sdi12_value_t vals[4];
+    uint8_t count = 0;
+    /* 10+ chars would be silently clipped into a wrong number */
+    TEST_ASSERT_EQUAL(SDI12_ERR_PARSE_FAILED,
+        sdi12_master_parse_data_values("+123456.789", 11, vals, 4,
+                                       &count, false));
+}
+
+void test_master_parse_rejects_junk(void)
+{
+    sdi12_value_t vals[4];
+    uint8_t count = 0;
+    TEST_ASSERT_EQUAL(SDI12_ERR_PARSE_FAILED,
+        sdi12_master_parse_data_values("+1.23abc+4", 10, vals, 4,
+                                       &count, false));
+    TEST_ASSERT_EQUAL(SDI12_ERR_PARSE_FAILED,
+        sdi12_master_parse_data_values("+.", 2, vals, 4, &count, false));
+}
+
+void test_master_identify_measurement_wrong_address(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("50005\r\n");   /* sensor '5' answered, we asked '0' */
+
+    sdi12_meas_response_t r;
+    TEST_ASSERT_NOT_EQUAL(SDI12_OK, sdi12_master_identify_measurement(
+        &m, '0', "M", SDI12_MEAS_STANDARD, &r));
+}
+
+void test_master_oversized_xcmd_rejected(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    m_last_cmd[0] = '\0';
+
+    char out[32];
+    size_t out_len = sizeof(out);
+    /* Body longer than any legal SDI-12 command — must be rejected
+     * before transmission, not silently truncated (losing the '!') */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND, sdi12_master_extended(
+        &m, '0', "THIS_BODY_IS_FAR_TOO_LONG_FOR_A_COMMAND",
+        out, &out_len, 100));
+    TEST_ASSERT_EQUAL_STRING("", m_last_cmd);
+}

@@ -5,6 +5,11 @@ without any hardware, SDI-12 bus, or external test framework.
 
 ---
 
+> Per-file test lists below describe the core of each suite; tests added in
+> the 0.5.x hardening releases (locale independence, page-boundary, strict
+> grammar, HV terminator, fat-binary, cold-review regressions) are not each
+> listed by name. `test/test_main.c` is the authoritative list.
+
 ## Quick Start
 
 ### Any C Compiler (recommended)
@@ -100,7 +105,7 @@ These are non-static, so `test_metamorphic.c` reuses them via `extern` declarati
 
 ## Test Categories
 
-### 1. CRC-16 Tests — `test_crc.c` (15 tests)
+### 1. CRC-16 Tests — `test_crc.c` (17 tests)
 
 Tests the CRC-16-IBM implementation used for MC/CC/RC command variants.
 
@@ -136,7 +141,7 @@ Tests the `sdi12_valid_address()` function.
 | `test_invalid_boundaries` | Chars adjacent to valid ranges are invalid |
 | `test_total_valid_count` | Exactly 62 valid addresses in ASCII range |
 
-### 3. Sensor (Slave) Tests — `test_sensor.c` (48 tests)
+### 3. Sensor (Slave) Tests — `test_sensor.c` (80 tests)
 
 Tests the complete sensor command parser and state machine.
 
@@ -164,7 +169,7 @@ Tests the complete sensor command parser and state machine.
 | Overlong values | 1 | Values longer than 9 chars clamped, no garbage on the bus |
 | NULL guard | 1 | `measurement_done(NULL, n)` returns an error instead of crashing |
 
-### 4. Master (Data Recorder) Tests — `test_master.c` (25 tests)
+### 4. Master (Data Recorder) Tests — `test_master.c` (69 tests)
 
 Tests the pure parsing functions plus full transactions against scripted I/O.
 

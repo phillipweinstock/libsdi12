@@ -282,12 +282,10 @@ sdi12_err_t sdi12_master_verify(sdi12_master_ctx_t *ctx,
 /**
  * Identify measurement capability.
  * Sends aIM!, aIMn!, aIMC!, aIMCn!, aIC!, aICn!, aICC!, aICCn!,
- *       aIV!, aIHA!, aIHB!, aIR0!–aIR9!.
  *
  * @param ctx       Master context.
  * @param addr      Sensor address.
  * @param cmd_body  Command body after 'aI' (e.g. "M", "M1", "MC", "C",
- *                  "V", "HA", "HB", "R0"–"R9").
  * @param type      Expected response format:
  *                  - SDI12_MEAS_STANDARD for M/V (atttn, n=1 digit)
  *                  - SDI12_MEAS_CONCURRENT for C/R (atttnn, n=2 digits)

@@ -54,6 +54,26 @@ recorder)** roles — with zero external dependencies.
 delegates it to a `format_binary_page` callback; framing and CRC are handled
 by the library.
 
+### What the library does NOT do
+
+The protocol engine is deliberately transport- and policy-free. Building a
+fully §7-conformant data recorder additionally requires, **in your code**:
+
+- **Retries (§7.2)** — the spec requires recorders to retry after 16.67–87 ms
+  and to repeat the break+command sequence; `sdi12_master_transact()` sends
+  once. The strict parser returns `SDI12_ERR_PARSE_FAILED`/`SDI12_ERR_TIMEOUT`
+  so your retry loop has the triggers it needs.
+- **Break scheduling (§7.1)** — send a break before addressing a new sensor
+  and after 87 ms of marking; the library never sends breaks on its own.
+- **Multi-line STX/ETX framing (§4.4.13.1)** — `sdi12_master_extended_multiline()`
+  concatenates lines by timing gap and passes any STX/ETX bytes through raw.
+
+**RAM budget note**: `sdi12_master_get_hv_binary_data()` uses a
+`SDI12_BIN_MAX_PAYLOAD + 2` (default 1002-byte) stack buffer, and the context
+structs are ~1.2 KB. On AVR-class targets (2 KB SRAM) avoid the high-volume
+binary API or rebuild with `-DSDI12_BIN_MAX_PAYLOAD=<smaller>` /
+`-DSDI12_MAX_RESPONSE_LEN=82`.
+
 ### Comparison With Other Libraries
 
 | Feature | libsdi12 | Arduino-SDI-12 | Others |
@@ -428,9 +448,6 @@ sdi12_crc_encode_ascii(crc, encoded);
 /* Append CRC before \r\n in a response buffer */
 char buf[64] = "0+1.23+4.56\r\n";
 sdi12_crc_append(buf, sizeof(buf));
-
-/* Length-aware variant for binary data (won't truncate at null bytes) */
-sdi12_crc_append_n(bin, 1 + payload_len, sizeof(bin));
 
 /* Verify a received CRC-bearing response */
 bool ok = sdi12_crc_verify("0+1.23+4.56XYZ\r\n", 17);

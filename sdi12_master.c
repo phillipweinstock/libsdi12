@@ -454,6 +454,7 @@ sdi12_err_t sdi12_master_identify_measurement(sdi12_master_ctx_t *ctx,
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
+    if (len < 1 || ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
     return sdi12_master_parse_meas_response(ctx->resp_buf, len, type, resp);
 }
 
@@ -674,17 +675,18 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
         data_len -= 3;
     }
 
-    /* Parse sign-prefixed values: +1.23-4.56+7.89 */
+    /* Parse sign-prefixed values: +1.23-4.56+7.89.
+     * STRICT per §4.4.8 Table 11: every value is sign, 1-7 digits, at
+     * most one decimal point, max 9 chars, values back-to-back. A
+     * malformed field returns SDI12_ERR_PARSE_FAILED rather than a
+     * plausible-but-wrong number — §7.2 lists "responses in an
+     * incorrect format" as a retry trigger, which callers can only
+     * implement if the parser reports the fault. */
     size_t pos = 0;
     while (pos < data_len && *count < max_values) {
-        /* Skip whitespace */
-        while (pos < data_len && resp_str[pos] == ' ') pos++;
-        if (pos >= data_len) break;
-
-        /* Expect + or - */
+        /* Values are contiguous — anything but a sign is malformed */
         if (resp_str[pos] != '+' && resp_str[pos] != '-') {
-            pos++;
-            continue;
+            return SDI12_ERR_PARSE_FAILED;
         }
 
         /* Extract the value string */
@@ -694,36 +696,46 @@ sdi12_err_t sdi12_master_parse_data_values(const char *resp_str, size_t len,
                resp_str[pos] == '.')) {
             pos++;
         }
-
-        if (pos > start + 1) {
-            /* Parse the numeric value by hand — strtod is LC_NUMERIC-
-             * sensitive: in a comma-decimal locale it stops at '.' and
-             * silently returns wrong values. The pd.d grammar is
-             * sign, digits, one optional point, digits. */
-            size_t vlen = pos - start;
-            if (vlen > SDI12_VALUE_MAX_CHARS) vlen = SDI12_VALUE_MAX_CHARS;
-
-            double mag = 0.0, frac_scale = 1.0;
-            uint8_t decs = 0;
-            bool in_frac = false;
-            for (size_t vi = 1; vi < vlen; vi++) {
-                char c = resp_str[start + vi];
-                if (c == '.') { in_frac = true; continue; }
-                if (in_frac) {
-                    frac_scale /= 10.0;
-                    mag += (c - '0') * frac_scale;
-                    decs++;
-                } else {
-                    mag = mag * 10.0 + (c - '0');
-                }
-            }
-
-            values[*count].value =
-                (resp_str[start] == '-') ? (float)-mag : (float)mag;
-            values[*count].decimals = decs;
-
-            (*count)++;
+        /* The value must run to the next sign or the end */
+        if (pos < data_len &&
+            resp_str[pos] != '+' && resp_str[pos] != '-') {
+            return SDI12_ERR_PARSE_FAILED;
         }
+
+        size_t vlen = pos - start;
+        if (vlen < 2 || vlen > SDI12_VALUE_MAX_CHARS)
+            return SDI12_ERR_PARSE_FAILED;
+
+        /* Parse the numeric value by hand — strtod is LC_NUMERIC-
+         * sensitive: in a comma-decimal locale it stops at '.' and
+         * silently returns wrong values. */
+        double mag = 0.0, frac_scale = 1.0;
+        uint8_t decs = 0;
+        int digits = 0;
+        bool in_frac = false;
+        for (size_t vi = 1; vi < vlen; vi++) {
+            char c = resp_str[start + vi];
+            if (c == '.') {
+                if (in_frac) return SDI12_ERR_PARSE_FAILED;
+                in_frac = true;
+                continue;
+            }
+            digits++;
+            if (in_frac) {
+                frac_scale /= 10.0;
+                mag += (c - '0') * frac_scale;
+                decs++;
+            } else {
+                mag = mag * 10.0 + (c - '0');
+            }
+        }
+        if (digits < 1 || digits > 7) return SDI12_ERR_PARSE_FAILED;
+
+        values[*count].value =
+            (resp_str[start] == '-') ? (float)-mag : (float)mag;
+        values[*count].decimals = decs;
+
+        (*count)++;
     }
 
     return SDI12_OK;
@@ -747,22 +759,35 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
+    /* §5.1: "a three character <CRC> is appended to the data before
+     * the <CR><LF>. The CRC must be present." Verify against the RAW
+     * length BEFORE trimming: crc_verify's 6-byte minimum assumes the
+     * untrimmed buffer, and the spec's empty terminator page
+     * a<CRC><CR><LF> (e.g. 0AP@) is exactly 6 raw bytes — verifying
+     * the trimmed 4 bytes read every compliant end-of-data page as a
+     * CRC error. */
+    bool crc_ok = ctx->resp_len >= 6 &&
+                  sdi12_crc_verify(ctx->resp_buf, ctx->resp_len);
+
     /* Response: a<data><CRC>\r\n — skip address, trim CRLF */
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
     if (len < 1) return SDI12_ERR_PARSE_FAILED;
     if (ctx->resp_buf[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
 
     if (len == 1) {
-        /* Bare address — no more data */
+        /* Bare address — a lenient sensor's abort/no-data page */
         *raw_len = 0;
         return SDI12_OK;
     }
 
-    /* §5.1: "a three character <CRC> is appended to the data before
-     * the <CR><LF>. The CRC must be present." Verify it, then strip
-     * it so the caller receives values only. */
-    if (len < 1 + 3 || !sdi12_crc_verify(ctx->resp_buf, len))
+    if (!crc_ok)
         return SDI12_ERR_CRC_MISMATCH;
+
+    if (len == 4) {
+        /* Empty terminator page: address + CRC only — end of data */
+        *raw_len = 0;
+        return SDI12_OK;
+    }
 
     size_t data_len = len - 1 - 3; /* skip address, drop CRC */
     if (data_len > *raw_len) data_len = *raw_len;

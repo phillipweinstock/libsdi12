@@ -1467,3 +1467,120 @@ void test_sensor_format_locale_independent(void)
     TEST_ASSERT_NOT_NULL(strstr(mock_response, "+25.50"));
     TEST_ASSERT_NULL(strchr(mock_response, ','));
 }
+
+/* ── Round-3 Cold-Review Batch ──────────────────────────────────────────── */
+
+void test_sensor_gate_matches_dispatcher_for_i_and_d(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.start_measurement = mock_start_meas_5s;
+
+    sdi12_sensor_process(&ctx, "0C!", 3);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    reset_mocks();
+
+    /* Malformed I/D/A traffic the dispatcher rejects must not abort
+     * the concurrent measurement either (4.4.7.1: VALID commands) */
+    sdi12_sensor_process(&ctx, "0IZZZZ!", 7);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    sdi12_sensor_process(&ctx, "0D12345!", 8);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    sdi12_sensor_process(&ctx, "0A!!", 4);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    sdi12_sensor_process(&ctx, "0IZ_001!", 8);
+    TEST_ASSERT_EQUAL(SDI12_STATE_MEASURING_C, ctx.state);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+}
+
+void test_sensor_metadata_requires_valid_family(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+
+    /* Table 20 has no aIZ_nnn! / aI_nnn! / aIH_nnn! forms — silence */
+    sdi12_sensor_process(&ctx, "0IZ_001!", 8);
+    sdi12_sensor_process(&ctx, "0I_001!", 7);
+    sdi12_sensor_process(&ctx, "0IH_001!", 8);
+    TEST_ASSERT_EQUAL(0, mock_send_count);
+
+    /* The real forms still answer */
+    sdi12_sensor_process(&ctx, "0IM_001!", 8);
+    TEST_ASSERT_EQUAL(1, mock_send_count);
+}
+
+void test_sensor_group_overflow_serves_promised_count(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx;
+    sdi12_ident_t ident = {0};
+    strncpy(ident.vendor, "TEST", sizeof(ident.vendor) - 1);
+    strncpy(ident.model, "M1", sizeof(ident.model) - 1);
+    strncpy(ident.firmware_version, "1", sizeof(ident.firmware_version) - 1);
+
+    sdi12_sensor_callbacks_t cb = {0};
+    cb.send_response = mock_send_response;
+    cb.read_param    = mock_read_param;
+    sdi12_sensor_init(&ctx, '0', &ident, &cb);
+    for (int i = 0; i < 12; i++)
+        sdi12_sensor_register_param(&ctx, 0, "TA", "C", 0);
+
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    /* aM! reports at most 9 values (atttn, single digit) */
+    TEST_ASSERT_EQUAL_STRING("00009\r\n", mock_response);
+
+    /* ...and the D pages must deliver exactly the promised 9, not 12 */
+    int plus = 0;
+    for (uint16_t page = 0; page < 10; page++) {
+        char cmd[8];
+        snprintf(cmd, sizeof(cmd), "0D%u!", page);
+        reset_mocks();
+        sdi12_sensor_process(&ctx, cmd, strlen(cmd));
+        if (mock_response[1] == '\r' || mock_response[1] == '\0')
+            break;
+        for (const char *p = mock_response + 1; *p; p++)
+            if (*p == '+' || *p == '-') plus++;
+    }
+    TEST_ASSERT_EQUAL(9, plus);
+}
+
+/* Fat binary formatter: fills exactly what its documented buflen
+ * allows and embeds the payload length in payload[0..1]. */
+static size_t mock_format_binary_fat(uint16_t page,
+                                     const sdi12_value_t *values,
+                                     uint8_t count,
+                                     char *buf, size_t buflen,
+                                     void *user_data)
+{
+    (void)values; (void)count; (void)user_data;
+    if (page > 0 || buflen < 5) return 0;
+    size_t payload = buflen - 2;      /* buf[1]=type, payload after */
+    buf[1] = (char)SDI12_BINTYPE_UINT8;
+    buf[2] = (char)(payload & 0xFF);
+    buf[3] = (char)((payload >> 8) & 0xFF);
+    for (size_t i = 4; i < 2 + payload; i++)
+        buf[i] = (char)(i & 0x7F);
+    return 1 + payload;
+}
+
+void test_sensor_binary_callback_buflen_is_honest(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.format_binary_page = mock_format_binary_fat;
+
+    sdi12_sensor_process(&ctx, "0HB!", 4);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0DB0!", 5);
+
+    /* Packet: addr(1) size(2 LE) type(1) payload(N) crc(2).
+     * The size field must equal the payload length the callback
+     * embedded — silent truncation under a valid CRC is data loss. */
+    TEST_ASSERT_TRUE(mock_response_len >= 8);
+    size_t psz = (uint8_t)mock_response[1] |
+                 ((size_t)(uint8_t)mock_response[2] << 8);
+    size_t embedded = (uint8_t)mock_response[4] |
+                      ((size_t)(uint8_t)mock_response[5] << 8);
+    TEST_ASSERT_EQUAL(embedded, psz);
+}
