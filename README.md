@@ -470,7 +470,7 @@ All API functions return `sdi12_err_t`:
 | Valid addresses | `0`–`9`, `A`–`Z`, `a`–`z` (62 total) |
 | Break signal | ≥ 12 ms spacing |
 | Marking after break | ≥ 8.33 ms |
-| Max response time | 15 ms (after marking) |
+| Max response time | 15 ms from the command's last stop bit (includes the 8.33 ms marking) |
 
 Conforms to **SDI-12 v1.4** (February 20, 2023).
 
@@ -489,10 +489,10 @@ make            # or: make CC=clang
 
 | Suite | Tests | What It Covers |
 |---|---:|---|
-| CRC-16 | 15 | Encode, decode, append, verify, roundtrip, edge cases |
+| CRC-16 | 17 | Encode, decode, append, verify, roundtrip, spec worked examples |
 | Address | 7 | Valid/invalid ranges, boundary chars, total count |
-| Sensor | 48 | All command types, state machine, D-page pagination, binary packet bounds, concurrent-abort semantics |
-| Master | 25 | Response parsing, CRC verification, address checks, scripted transactions |
+| Sensor | 76 | All command types, state machine, D-page pagination (incl. exact 75-char boundary), value formatting, strict grammar, abort semantics |
+| Master | 62 | Response parsing, CRC verification, address checks, scripted binary transactions, locale independence |
 | Metamorphic | 19 | Property-based: mutation detection, determinism, bijection |
 
 See [TESTING.md](TESTING.md) for architecture, CMake/PlatformIO runners, and

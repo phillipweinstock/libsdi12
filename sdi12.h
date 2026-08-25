@@ -109,8 +109,13 @@ extern "C" {
 /** Max additional measurement/concurrent command indices (M1-M9, C1-C9). */
 #define SDI12_MAX_MEAS_GROUPS 10
 
-/** Max number of registerable parameters across all groups. */
+/** Max number of registerable parameters across all groups.
+ *  Override at compile time (-DSDI12_MAX_PARAMS=NN) for sensors with
+ *  more channels; both library and application must agree (it changes
+ *  sizeof(sdi12_sensor_ctx_t)). */
+#ifndef SDI12_MAX_PARAMS
 #define SDI12_MAX_PARAMS 20
+#endif
 
 /** Max extended command registrations. */
 #define SDI12_MAX_XCMDS 8
@@ -285,15 +290,6 @@ typedef struct {
     char units[24];  /**< Units string (e.g. "C", "kPa"). Null-terminated. */
 } sdi12_param_meta_response_t;
 
-/**
- * @brief Parsed identification response (master-side use).
- */
-typedef struct {
-    char address;
-    char sdi12_version[3];  /**< e.g. "14" */
-    sdi12_ident_t info;
-} sdi12_ident_response_t;
-
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Address Validation                                                       */
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -370,7 +366,8 @@ sdi12_err_t sdi12_crc_append(char *buf, size_t buflen);
  * The CRC is computed over buf[0..data_len-1] and inserted before CR/LF.
  *
  * @param buf       Response buffer.
- * @param data_len  Number of data bytes (payload before CR/LF, or total if no CR/LF).
+ * @param data_len  Exact number of data bytes — never adjusted; unlike
+ *                  sdi12_crc_append(), trailing CR/LF bytes are treated as data.
  * @param buflen    Total buffer capacity.
  * @return SDI12_OK on success, SDI12_ERR_BUFFER_OVERFLOW if insufficient room.
  */

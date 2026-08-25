@@ -175,8 +175,10 @@ sdi12_err_t sdi12_master_change_address(sdi12_master_ctx_t *ctx,
     char cmd[8];
     snprintf(cmd, sizeof(cmd), "%cA%c!", old_addr, new_addr);
 
-    /* §4.4.4: the sensor may take up to one second to persist the new
-     * address (EEPROM write) before it responds. */
+    /* §4.4.4: the sensor responds normally, but is then allowed to be
+     * unresponsive for up to one second while it persists the address.
+     * A generous window covers slow responders too; callers should
+     * additionally wait ~1 s before the NEXT command to the sensor. */
     sdi12_err_t err = sdi12_master_transact(
         ctx, cmd, SDI12_ADDRESS_CHANGE_DELAY_MS + SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;

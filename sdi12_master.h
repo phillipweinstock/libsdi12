@@ -18,7 +18,7 @@
  * Usage Pattern:
  *   1. sdi12_master_init()
  *   2. sdi12_master_send_break()       — wake bus
- *   3. sdi12_master_request_*()        — build command string
+ *   3. sdi12_master_start_measurement() — begin a measurement
  *   4. User sends command + waits for response via platform I/O
  *   5. sdi12_master_parse_*()          — decode sensor response
  */
@@ -75,7 +75,8 @@ typedef void (*sdi12_master_set_dir_fn)(sdi12_dir_t dir, void *user_data);
 
 /**
  * Generate a break signal on the bus.
- * Implementation must hold the line marking (spacing) for ≥ 12ms.
+ * Implementation must hold the line in SPACING (break) for >= 12 ms,
+ * then return to marking.
  */
 typedef void (*sdi12_master_send_break_fn)(void *user_data);
 
@@ -327,7 +328,6 @@ sdi12_err_t sdi12_master_identify_param(sdi12_master_ctx_t *ctx,
  * Sends "aD0!" through "aD999!" and returns the raw response.
  *
  * For ASCII responses: caller should use sdi12_master_parse_data_values().
- * For binary responses: caller should use sdi12_master_parse_binary_page().
  *
  * @param ctx       Master context.
  * @param addr      Sensor address.

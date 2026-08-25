@@ -423,43 +423,17 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint16_t page)
         return SDI12_OK;
     }
 
-    /* High-volume binary: delegate to user callback if available.
-     * The callback writes type byte + payload at buf[1] (see
-     * sdi12_format_binary_fn); this path transmits that block verbatim
-     * after the address — same convention as the aDBn! path, minus the
-     * Table 14 size/CRC framing. */
-    if (ctx->pending_meas_type == SDI12_MEAS_HIGHVOL_BINARY &&
-        ctx->cb.format_binary_page != NULL) {
-        ctx->resp_buf[0] = ctx->address;
-        size_t payload = ctx->cb.format_binary_page(
-            page, ctx->data_cache, ctx->data_cache_count,
-            ctx->resp_buf, sizeof(ctx->resp_buf),
-            ctx->cb.user_data);
-        size_t pos = 1 + payload;  /* address + binary payload */
-        if (pos > sizeof(ctx->resp_buf) - 6)
-            pos = sizeof(ctx->resp_buf) - 6; /* room for CRC + CRLF + null */
-
-        if (ctx->crc_requested) {
-            /* Append CRC using explicit length (binary may contain NUL) */
-            sdi12_crc_append_n(ctx->resp_buf, pos, sizeof(ctx->resp_buf));
-            ctx->resp_len = pos + 3 + 2;  /* data + 3 CRC chars + CR + LF */
-        } else {
-            if (pos + 2 < sizeof(ctx->resp_buf)) {
-                ctx->resp_buf[pos]     = '\r';
-                ctx->resp_buf[pos + 1] = '\n';
-                ctx->resp_buf[pos + 2] = '\0';
-            }
-            ctx->resp_len = pos + 2;  /* data + CR + LF */
-        }
-        send_response(ctx);
-        return SDI12_OK;
-    }
+    /* NOTE: raw binary via aDn! was removed — §5.2 retrieves binary
+     * data through aDBn! only, and §4.2's binary framing exception is
+     * scoped to that command. An aDn! after aHB! now serves the cached
+     * values in ordinary ASCII form, which is always spec-legal. */
 
     /* Determine max value chars based on measurement type */
     uint16_t max_chars = SDI12_M_VALUES_MAX_CHARS;
     if (ctx->pending_meas_type == SDI12_MEAS_CONCURRENT ||
         ctx->pending_meas_type == SDI12_MEAS_CONTINUOUS ||
-        ctx->pending_meas_type == SDI12_MEAS_HIGHVOL_ASCII) {
+        ctx->pending_meas_type == SDI12_MEAS_HIGHVOL_ASCII ||
+        ctx->pending_meas_type == SDI12_MEAS_HIGHVOL_BINARY) {
         max_chars = SDI12_C_VALUES_MAX_CHARS;
     }
 

@@ -1,3 +1,18 @@
+libsdi12 (0.5.2-1) unstable; urgency=medium
+
+  * New upstream release 0.5.2:
+    - Fix D-page boundary off-by-one that silently lost the value landing
+      exactly on the 75-char page limit.
+    - Locale-independent value formatting and parsing (no %f/strtod).
+    - Precision reduction with rounding when integer digits + decimals
+      exceed the spec's 7-digit cap.
+    - Strict V/R/D command grammar; concurrent measurements aborted only
+      by well-formed commands; state-machine hygiene fixes.
+    - Test suite grown from 165 to 181 tests.
+  * Add sdi12_crc16_update to the symbols file (introduced in 0.5.1).
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Tue, 25 Aug 2026 12:00:00 +1000
+
 libsdi12 (0.4.0-1) unstable; urgency=medium
 
   * Initial Debian packaging (Closes: #1130920).

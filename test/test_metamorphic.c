@@ -403,13 +403,21 @@ void test_meta_sensor_hb_with_binary_callback(void)
     /* Start HB measurement */
     sdi12_sensor_process(&ctx, "0HB!", 4);
 
-    /* Request data page */
+    /* §5.2: binary data is retrieved via aDBn! only. A plain aD0!
+     * serves the cached values in ordinary ASCII form and must NOT
+     * invoke the binary formatter. */
     reset_mocks();
     mock_binary_page_called = 0;
     sdi12_sensor_process(&ctx, "0D0!", 4);
+    TEST_ASSERT_EQUAL(0, mock_binary_page_called);
+    TEST_ASSERT_EQUAL_CHAR('0', mock_response[0]);
+    TEST_ASSERT_NOT_NULL(strchr(mock_response, '+'));  /* ASCII values */
 
+    /* aDB0! is the binary path */
+    reset_mocks();
+    mock_binary_page_called = 0;
+    sdi12_sensor_process(&ctx, "0DB0!", 5);
     TEST_ASSERT_EQUAL(1, mock_binary_page_called);
-    /* Response should contain high-bit-set bytes (binary payload) */
     TEST_ASSERT_EQUAL_CHAR('0', mock_response[0]); /* address */
 }
 
