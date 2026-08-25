@@ -13,7 +13,7 @@ recorder)** roles — with zero external dependencies.
   lines, master in 3
 - ✅ **Pure C11, no `malloc`** — all state lives in user-allocated context
   structs; UART, GPIO, and timing are abstracted behind callbacks
-- ✅ **181 tests** — unit + metamorphic/property-based, all runnable on
+- ✅ **192 tests** — unit + metamorphic/property-based, all runnable on
   desktop with no hardware and no external test framework
 - ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
   MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
@@ -86,7 +86,7 @@ binary API or rebuild with `-DSDI12_BIN_MAX_PAYLOAD=<smaller>` /
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 181 tests | ❌ | Minimal |
+| Test suite | 192 tests | ❌ | Minimal |
 
 ---
 
@@ -495,13 +495,13 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-**181 tests** run on desktop with no hardware and no external framework —
+**192 tests** run on desktop with no hardware and no external framework —
 the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 181 Tests 0 Failures
+./test_sdi12    # 192 Tests 0 Failures
 ```
 
 | Suite | Tests | What It Covers |

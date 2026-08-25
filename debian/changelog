@@ -1,3 +1,18 @@
+libsdi12 (0.5.3-1) unstable; urgency=medium
+
+  * New upstream release 0.5.3 (third independent-review remediation):
+    - get_hv_data accepts the spec's mandatory empty HV terminator page
+      (previously a phantom CRC error on every compliant sensor).
+    - format_binary_page receives an honest buflen; overflow yields the
+      Table 15 invalid-request packet instead of silent truncation
+      under a valid CRC.
+    - Concurrent-abort gate shares one grammar with the dispatcher;
+      strict Table 11 value parsing; over-registered groups capped at
+      the promised count; sdi12_crc_append_n removed (dead and wrong).
+    - Test suite grown from 181 to 192 tests.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Tue, 25 Aug 2026 18:00:00 +1000
+
 libsdi12 (0.5.2-1) unstable; urgency=medium
 
   * New upstream release 0.5.2:
