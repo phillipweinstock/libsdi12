@@ -1027,6 +1027,35 @@ void test_sensor_decimals_clamped_to_fit_nine_chars(void)
     TEST_ASSERT_EQUAL_STRING("0+1.000000+1+1+1+1\r\n", mock_response);
 }
 
+static sdi12_value_t mock_read_param_rounds_to_zero(uint8_t idx, void *user_data)
+{
+    (void)user_data;
+    sdi12_value_t v = {1.0f, 0};
+    switch (idx) {
+    case 0: v.value = -0.004f;     v.decimals = 2; break;
+    case 1: v.value = -0.4f;       v.decimals = 0; break;
+    case 2: v.value = -0.0000001f; v.decimals = 6; break;
+    case 3: v.value = -1.5f;       v.decimals = 0; break;
+    default: break;
+    }
+    return v;
+}
+
+void test_sensor_negative_rounding_to_zero_is_positive_zero(void)
+{
+    reset_mocks();
+    sdi12_sensor_ctx_t ctx = create_test_ctx('0');
+    ctx.cb.read_param = mock_read_param_rounds_to_zero;
+
+    sdi12_sensor_process(&ctx, "0M!", 3);
+    reset_mocks();
+    sdi12_sensor_process(&ctx, "0D0!", 4);
+
+    /* A negative that rounds to zero IS zero: it must go out as "+0.00",
+     * the same as -0.0f, not "-0.00". Real negatives keep their sign. */
+    TEST_ASSERT_EQUAL_STRING("0+0.00+0+0.000000-2+1\r\n", mock_response);
+}
+
 /* ── High-Volume ASCII Mandatory CRC (§5.1) ─────────────────────────────── */
 
 void test_sensor_ha_pages_carry_mandatory_crc(void)

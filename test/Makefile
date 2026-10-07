@@ -26,7 +26,7 @@ endif
 
 all: test
 
-$(BIN): $(TEST_SRCS) $(LIB_SRCS) sdi12_test.h ../sdi12.h ../sdi12_sensor.h ../sdi12_master.h
+$(BIN): $(TEST_SRCS) $(LIB_SRCS) sdi12_test.h ../sdi12.h ../sdi12_sensor.h ../sdi12_master.h ../sdi12_fmt.h
 	$(CC) $(CFLAGS) -o $@ $(TEST_SRCS) $(LIB_SRCS) -lm
 
 test: $(BIN)

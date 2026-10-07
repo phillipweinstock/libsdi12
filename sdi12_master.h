@@ -348,7 +348,8 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
  * @param ctx         Master context.
  * @param addr        Sensor address.
  * @param page        Data page 0–999.
- * @param out_type    [out] Binary data type.
+ * @param out_type    [out] Binary data type. Written only once the packet
+ *                    passes its CRC and address checks.
  * @param out_payload [out] Payload buffer.
  * @param out_len     [in] Buffer capacity / [out] actual payload bytes.
  * @return SDI12_OK on success, SDI12_ERR_CRC_MISMATCH on CRC failure.

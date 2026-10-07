@@ -6,10 +6,9 @@
  * parsing for an SDI-12 data recorder. All bus I/O is through callbacks.
  */
 #include "sdi12_master.h"
+#include "sdi12_fmt.h"
 #include <string.h>
-#include <stdlib.h>
 #include <ctype.h>
-#include <stdio.h>
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Internal Helpers                                                         */
@@ -22,6 +21,24 @@ static size_t trim_crlf(char *buf, size_t len)
         buf[--len] = '\0';
     }
     return len;
+}
+
+/** Start building a command: set up the builder and write the address. */
+static void cmd_begin(sdi12_sbuf_t *b, char *cmd, size_t cap, char addr)
+{
+    sdi12_sbuf_init(b, cmd, cap);
+    sdi12_sbuf_putc(b, addr);
+}
+
+/** Start a command that carries a caller string: "a<letter><body>".
+ *  A body too long for cmd is cut short; send_command then rejects the
+ *  result, which is still longer than SDI12_CMD_MAX_CHARS. */
+static void cmd_begin_body(sdi12_sbuf_t *b, char *cmd, size_t cap,
+                           char addr, char letter, const char *body)
+{
+    cmd_begin(b, cmd, cap, addr);
+    sdi12_sbuf_putc(b, letter);
+    sdi12_sbuf_puts(b, body, cap);
 }
 
 /**
@@ -150,7 +167,9 @@ sdi12_err_t sdi12_master_acknowledge(sdi12_master_ctx_t *ctx,
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
     char cmd[4];
-    snprintf(cmd, sizeof(cmd), "%c!", addr);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err == SDI12_ERR_TIMEOUT) {
@@ -173,7 +192,11 @@ sdi12_err_t sdi12_master_change_address(sdi12_master_ctx_t *ctx,
     }
 
     char cmd[8];
-    snprintf(cmd, sizeof(cmd), "%cA%c!", old_addr, new_addr);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), old_addr);
+    sdi12_sbuf_putc(&b, 'A');
+    sdi12_sbuf_putc(&b, new_addr);
+    sdi12_sbuf_putc(&b, '!');
 
     /* §4.4.4: the sensor responds normally, but is then allowed to be
      * unresponsive for up to one second while it persists the address.
@@ -202,7 +225,10 @@ sdi12_err_t sdi12_master_identify(sdi12_master_ctx_t *ctx,
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
     char cmd[8];
-    snprintf(cmd, sizeof(cmd), "%cI!", addr);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    sdi12_sbuf_putc(&b, 'I');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -273,48 +299,42 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
      * reading stack garbage (e.g. an 18-hour wait_seconds). */
     memset(resp, 0, sizeof(*resp));
 
-    /* Build command */
     char cmd[16];
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
     switch (type) {
     case SDI12_MEAS_STANDARD:
-        if (crc) {
-            if (group > 0) snprintf(cmd, sizeof(cmd), "%cMC%u!", addr, group);
-            else           snprintf(cmd, sizeof(cmd), "%cMC!", addr);
-        } else {
-            if (group > 0) snprintf(cmd, sizeof(cmd), "%cM%u!", addr, group);
-            else           snprintf(cmd, sizeof(cmd), "%cM!", addr);
-        }
+        if (crc) sdi12_sbuf_puts(&b, "MC", 2);
+        else     sdi12_sbuf_putc(&b, 'M');
+        if (group > 0) sdi12_sbuf_u32(&b, group, 1, '0');
         break;
 
     case SDI12_MEAS_CONCURRENT:
-        if (crc) {
-            if (group > 0) snprintf(cmd, sizeof(cmd), "%cCC%u!", addr, group);
-            else           snprintf(cmd, sizeof(cmd), "%cCC!", addr);
-        } else {
-            if (group > 0) snprintf(cmd, sizeof(cmd), "%cC%u!", addr, group);
-            else           snprintf(cmd, sizeof(cmd), "%cC!", addr);
-        }
+        if (crc) sdi12_sbuf_puts(&b, "CC", 2);
+        else     sdi12_sbuf_putc(&b, 'C');
+        if (group > 0) sdi12_sbuf_u32(&b, group, 1, '0');
         break;
 
     case SDI12_MEAS_VERIFICATION:
-        snprintf(cmd, sizeof(cmd), "%cV!", addr);
+        sdi12_sbuf_putc(&b, 'V');
         break;
 
     case SDI12_MEAS_HIGHVOL_ASCII:
         /* The spec defines no aHAC! — the CRC on the data pages is
          * mandatory regardless (§5.1), so the crc flag is moot here. */
         (void)crc;
-        snprintf(cmd, sizeof(cmd), "%cHA!", addr);
+        sdi12_sbuf_puts(&b, "HA", 2);
         break;
 
     case SDI12_MEAS_HIGHVOL_BINARY:
         /* Likewise no aHBC! — binary packets always carry a CRC. */
-        snprintf(cmd, sizeof(cmd), "%cHB!", addr);
+        sdi12_sbuf_puts(&b, "HB", 2);
         break;
 
     default:
         return SDI12_ERR_INVALID_COMMAND;
     }
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -354,7 +374,11 @@ sdi12_err_t sdi12_master_get_data(sdi12_master_ctx_t *ctx,
     memset(resp, 0, sizeof(*resp));
 
     char cmd[8];
-    snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    sdi12_sbuf_putc(&b, 'D');
+    sdi12_sbuf_u32(&b, page, 1, '0');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -394,8 +418,12 @@ sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
     memset(resp, 0, sizeof(*resp));
 
     char cmd[8];
-    if (crc) snprintf(cmd, sizeof(cmd), "%cRC%u!", addr, index);
-    else     snprintf(cmd, sizeof(cmd), "%cR%u!", addr, index);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    if (crc) sdi12_sbuf_puts(&b, "RC", 2);
+    else     sdi12_sbuf_putc(&b, 'R');
+    sdi12_sbuf_u32(&b, index, 1, '0');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -448,7 +476,9 @@ sdi12_err_t sdi12_master_identify_measurement(sdi12_master_ctx_t *ctx,
 
     /* Build command: aI<cmd_body>!  e.g. "0IM!", "0IC!", "0IHA!" */
     char cmd[SDI12_CMD_MAX_CHARS + 4];
-    snprintf(cmd, sizeof(cmd), "%cI%s!", addr, cmd_body);
+    sdi12_sbuf_t b;
+    cmd_begin_body(&b, cmd, sizeof(cmd), addr, 'I', cmd_body);
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -466,12 +496,17 @@ sdi12_err_t sdi12_master_identify_param(sdi12_master_ctx_t *ctx,
 {
     if (!ctx || !cmd_body || !resp) return SDI12_ERR_INVALID_COMMAND;
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
+    if (param_num < 1 || param_num > 999) return SDI12_ERR_INVALID_COMMAND;
 
     memset(resp, 0, sizeof(*resp));
 
     /* Build command: aI<cmd_body>_nnn!  e.g. "0IM_001!" */
     char cmd[SDI12_CMD_MAX_CHARS + 4];
-    snprintf(cmd, sizeof(cmd), "%cI%s_%03u!", addr, cmd_body, param_num);
+    sdi12_sbuf_t b;
+    cmd_begin_body(&b, cmd, sizeof(cmd), addr, 'I', cmd_body);
+    sdi12_sbuf_putc(&b, '_');
+    sdi12_sbuf_u32(&b, param_num, 3, '0');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -529,7 +564,9 @@ sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
     char cmd[SDI12_CMD_MAX_CHARS + 4];
-    snprintf(cmd, sizeof(cmd), "%cX%s!", addr, xcmd);
+    sdi12_sbuf_t b;
+    cmd_begin_body(&b, cmd, sizeof(cmd), addr, 'X', xcmd);
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, timeout_ms);
     if (err != SDI12_OK) return err;
@@ -555,9 +592,10 @@ sdi12_err_t sdi12_master_extended_multiline(sdi12_master_ctx_t *ctx,
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
 
     char cmd[SDI12_CMD_MAX_CHARS + 4];
-    snprintf(cmd, sizeof(cmd), "%cX%s!", addr, xcmd);
+    sdi12_sbuf_t b;
+    cmd_begin_body(&b, cmd, sizeof(cmd), addr, 'X', xcmd);
+    sdi12_sbuf_putc(&b, '!');
 
-    /* Send the command */
     sdi12_err_t err = send_command(ctx, cmd);
     if (err != SDI12_OK) return err;
 
@@ -754,7 +792,11 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
     if (page >= SDI12_MAX_HV_DATA_PAGES) return SDI12_ERR_INVALID_COMMAND;
 
     char cmd[12];
-    snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    sdi12_sbuf_putc(&b, 'D');
+    sdi12_sbuf_u32(&b, page, 1, '0');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
@@ -813,9 +855,12 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     if (!sdi12_valid_address(addr)) return SDI12_ERR_INVALID_ADDRESS;
     if (page >= SDI12_MAX_HV_DATA_PAGES) return SDI12_ERR_INVALID_COMMAND;
 
-    /* Send aDBn! command */
     char cmd[16];
-    snprintf(cmd, sizeof(cmd), "%cDB%u!", addr, page);
+    sdi12_sbuf_t b;
+    cmd_begin(&b, cmd, sizeof(cmd), addr);
+    sdi12_sbuf_puts(&b, "DB", 2);
+    sdi12_sbuf_u32(&b, page, 1, '0');
+    sdi12_sbuf_putc(&b, '!');
 
     sdi12_err_t err = send_command(ctx, cmd);
     if (err != SDI12_OK) return err;
@@ -831,14 +876,13 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     err = recv_exact(ctx, hdr, 3, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
 
-    uint16_t pkt_size = (uint8_t)hdr[1] | ((uint16_t)(uint8_t)hdr[2] << 8);
+    uint16_t pkt_size = (uint16_t)((uint8_t)hdr[1] |
+                                   ((uint16_t)(uint8_t)hdr[2] << 8));
 
     /* Read data type (1 byte) */
     char type_byte;
     err = recv_exact(ctx, &type_byte, 1, SDI12_RESPONSE_TIMEOUT_MS);
     if (err != SDI12_OK) return err;
-
-    *out_type = (sdi12_bintype_t)(uint8_t)type_byte;
 
     /* Read payload + CRC into a local buffer */
     size_t tail_len = (size_t)pkt_size + 2; /* payload + CRC(2) */
@@ -867,8 +911,8 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
         crc = sdi12_crc16_update(crc, &type_byte, 1);
         crc = sdi12_crc16_update(crc, tail, pkt_size);
 
-        uint16_t received_crc = (uint8_t)tail[pkt_size] |
-                                ((uint16_t)(uint8_t)tail[pkt_size + 1] << 8);
+        uint16_t received_crc = (uint16_t)((uint8_t)tail[pkt_size] |
+                                           ((uint16_t)(uint8_t)tail[pkt_size + 1] << 8));
 
         if (crc != received_crc) return SDI12_ERR_CRC_MISMATCH;
     }
@@ -876,6 +920,8 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
     /* A CRC-valid packet from a different sensor is still the wrong
      * answer — the ASCII paths reject these, the binary path must too. */
     if (hdr[0] != addr) return SDI12_ERR_INVALID_ADDRESS;
+
+    *out_type = (sdi12_bintype_t)(uint8_t)type_byte;
 
     /* Copy payload to output — report only what was actually written,
      * and flag truncation so the caller never reads past its buffer. */

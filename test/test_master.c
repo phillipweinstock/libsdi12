@@ -489,6 +489,39 @@ void test_master_hv_binary_wrong_address_rejected(void)
     TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS, err);
 }
 
+void test_master_hv_binary_error_leaves_type_untouched(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    uint8_t payload[4] = { 9, 9, 9, 9 };
+    char pkt[32];
+    sdi12_bintype_t type;
+    uint8_t out[16];
+    size_t out_len;
+
+    /* CRC-valid packet from the wrong sensor */
+    size_t pkt_len = make_bin_packet(pkt, '1', SDI12_BINTYPE_UINT8,
+                                     payload, sizeof(payload));
+    set_reply_bin(pkt, pkt_len);
+    type = SDI12_BINTYPE_INVALID;
+    out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_ADDRESS,
+                      sdi12_master_get_hv_binary_data(&m, '0', 0, &type,
+                                                      out, &out_len));
+    TEST_ASSERT_EQUAL(SDI12_BINTYPE_INVALID, type);
+
+    /* Right sensor, but a payload bit flipped in transit */
+    pkt_len = make_bin_packet(pkt, '0', SDI12_BINTYPE_UINT8,
+                              payload, sizeof(payload));
+    pkt[4] ^= 0x01;
+    set_reply_bin(pkt, pkt_len);
+    type = SDI12_BINTYPE_INVALID;
+    out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_ERR_CRC_MISMATCH,
+                      sdi12_master_get_hv_binary_data(&m, '0', 0, &type,
+                                                      out, &out_len));
+    TEST_ASSERT_EQUAL(SDI12_BINTYPE_INVALID, type);
+}
+
 /* ── Command Coverage: Acknowledge / Address family ─────────────────────── */
 
 void test_master_acknowledge_present(void)
@@ -696,6 +729,25 @@ void test_master_identify_param_metadata(void)
     TEST_ASSERT_EQUAL_STRING("0IM_001!", m_last_cmd);
     TEST_ASSERT_EQUAL_STRING("TA", r.shef);
     TEST_ASSERT_EQUAL_STRING("degC", r.units);
+}
+
+void test_master_identify_param_rejects_out_of_range_number(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    sdi12_param_meta_response_t r;
+
+    /* Table 20: nnn is 001-999. A sensor stays silent on anything else,
+     * so sending it would only cost the caller a full timeout. */
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+                      sdi12_master_identify_param(&m, '0', "M", 0, &r));
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND,
+                      sdi12_master_identify_param(&m, '0', "M", 1000, &r));
+    TEST_ASSERT_EQUAL_STRING("", m_last_cmd);
+
+    set_reply("0,TA,degC;\r\n");
+    TEST_ASSERT_EQUAL(SDI12_OK,
+                      sdi12_master_identify_param(&m, '0', "M", 999, &r));
+    TEST_ASSERT_EQUAL_STRING("0IM_999!", m_last_cmd);
 }
 
 /* ── Command Coverage: High-volume ASCII, break, bintype ────────────────── */

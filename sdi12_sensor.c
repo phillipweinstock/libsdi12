@@ -10,9 +10,9 @@
  * All I/O through callbacks — zero hardware dependencies.
  */
 #include "sdi12_sensor.h"
+#include "sdi12_fmt.h"
 #include <ctype.h>
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -52,11 +52,10 @@ static bool identify_well_formed(const char *cmd, size_t cmdlen);
 
 /**
  * Format a single value with mandatory sign prefix per SDI-12 spec.
+ * Writes at most SDI12_VALUE_MAX_CHARS chars and returns that length.
  *
- * Hand-rolled fixed-point formatting: printf's %f is LC_NUMERIC-
- * sensitive, and a host application calling setlocale() must not make
- * the sensor emit "+3,14" on the wire. Integer conversions (%lu) are
- * locale-safe.
+ * Hand-rolled fixed-point formatting, so a host application calling
+ * setlocale() can never make the sensor emit "+3,14" on the wire.
  *
  * The requested decimals are reduced so integer digits + decimals never
  * exceed the spec's 7-digit total — the value is ROUNDED to the
@@ -65,12 +64,16 @@ static bool identify_well_formed(const char *cmd, size_t cmdlen);
 static int format_value(char *buf, size_t buflen, sdi12_value_t val)
 {
     float v = val.value;
+    sdi12_sbuf_t b;
+    sdi12_sbuf_init(&b, buf, buflen);
 
     /* Non-finite input (dead ADC, failed conversion) or a magnitude
      * beyond the 7-digit cap: saturate to the ±9999999 sentinel.
      * The negated comparison is deliberate: it is also true for NaN. */
     if (!(fabsf(v) <= SDI12_VALUE_LIMIT)) {
-        return snprintf(buf, buflen, "%c9999999", v < 0.0f ? '-' : '+');
+        sdi12_sbuf_putc(&b, v < 0.0f ? '-' : '+');
+        sdi12_sbuf_puts(&b, "9999999", 7);
+        return (int)b.len;
     }
 
     char sign = v >= 0.0f ? '+' : '-';
@@ -100,16 +103,22 @@ static int format_value(char *buf, size_t buflen, sdi12_value_t val)
         decimals--;
     }
     if (scaled > 9999999UL) scaled = 9999999UL;
+    if (scaled == 0) sign = '+';  /* rounded to zero: "+0.00", never "-0.00" */
 
     /* decimals may have shrunk above — recompute the divisor */
     scale = 1;
     for (unsigned i = 0; i < decimals; i++) scale *= 10;
 
     if (decimals == 0) {
-        return snprintf(buf, buflen, "%c%lu", sign, scaled);
+        sdi12_sbuf_putc(&b, sign);
+        sdi12_sbuf_u32(&b, (uint32_t)scaled, 1, '0');
+    } else {
+        sdi12_sbuf_putc(&b, sign);
+        sdi12_sbuf_u32(&b, (uint32_t)(scaled / scale), 1, '0');
+        sdi12_sbuf_putc(&b, '.');
+        sdi12_sbuf_u32(&b, (uint32_t)(scaled % scale), decimals, '0');
     }
-    return snprintf(buf, buflen, "%c%lu.%0*lu", sign,
-                    scaled / scale, (int)decimals, scaled % scale);
+    return (int)b.len;
 }
 
 /**
@@ -144,9 +153,6 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
         int vlen = format_value(vbuf, sizeof(vbuf), vals[i]);
 
         if (vlen <= 0) continue;
-        /* snprintf returns the untruncated length — clamp to what was
-         * actually written so an overlong value can't smuggle garbage */
-        if ((size_t)vlen > sizeof(vbuf) - 1) vlen = (int)(sizeof(vbuf) - 1);
 
         /* Value doesn't fit on the current page — advance to the next */
         if (page_used + (size_t)vlen > max_value_chars && page_used > 0) {
@@ -157,10 +163,9 @@ static sdi12_err_t format_data_page(sdi12_sensor_ctx_t *ctx,
         if (current_page > page) break;
 
         if (current_page == page) {
-            /* Room for CRC + CRLF + NUL after this value. Strictly
-             * greater-than: a value ending exactly at the limit fits —
-             * >= here silently dropped the value landing on the
-             * boundary (a page filling exactly 75 chars). */
+            /* Room for CRC + CRLF + NUL after this value. A value
+             * ending exactly at the limit still fits: a page may hold
+             * exactly 75 value chars. */
             if (pos + (size_t)vlen > buflen - 6) {
                 break;
             }
@@ -198,6 +203,42 @@ static void send_response(sdi12_sensor_ctx_t *ctx)
     }
 }
 
+/** Most values a measurement command can announce: 9 for M/V, 99 for C,
+ *  999 for HA/HB. Its digit count is the width of the reply's n field. */
+static uint16_t family_max(sdi12_meas_type_t type)
+{
+    if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) return 9;
+    if (type == SDI12_MEAS_CONCURRENT) return 99;
+    return 999;
+}
+
+/** Build the bare-address reply, "a<CR><LF>" or "a<CRC><CR><LF>" — how
+ *  the protocol says "nothing to report". */
+static void build_address_reply(sdi12_sensor_ctx_t *ctx, char addr, bool crc)
+{
+    sdi12_sbuf_t b;
+    sdi12_sbuf_init(&b, ctx->resp_buf, sizeof(ctx->resp_buf));
+    sdi12_sbuf_putc(&b, addr);
+    if (crc) sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
+    else     sdi12_sbuf_puts(&b, "\r\n", 2);
+}
+
+/** Build a measurement reply: atttn (M/V), atttnn (C) or atttnnn (HA/HB). */
+static void build_meas_reply(sdi12_sensor_ctx_t *ctx, uint16_t ttt,
+                             uint16_t n, sdi12_meas_type_t type)
+{
+    uint16_t max = family_max(type);
+    unsigned width = (max == 9) ? 1u : (max == 99) ? 2u : 3u;
+    if (n > max) n = max;
+
+    sdi12_sbuf_t b;
+    sdi12_sbuf_init(&b, ctx->resp_buf, sizeof(ctx->resp_buf));
+    sdi12_sbuf_putc(&b, ctx->address);
+    sdi12_sbuf_u32(&b, ttt, 3, '0');
+    sdi12_sbuf_u32(&b, n, width, '0');
+    sdi12_sbuf_puts(&b, "\r\n", 2);
+}
+
 /** Populate data cache synchronously by reading params in a group.
  *  `limit` is the command family's value-count cap (9 for M/V, 99 for
  *  C, 999 for HV): the D pages must deliver exactly the count the
@@ -228,7 +269,7 @@ static void read_group_sync(sdi12_sensor_ctx_t *ctx, uint8_t group,
 /** Handle a! / ?! — Acknowledge active / Address query. */
 static sdi12_err_t handle_acknowledge(sdi12_sensor_ctx_t *ctx)
 {
-    snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
+    build_address_reply(ctx, ctx->address, false);
     send_response(ctx);
     return SDI12_OK;
 }
@@ -236,13 +277,15 @@ static sdi12_err_t handle_acknowledge(sdi12_sensor_ctx_t *ctx)
 /** Handle aI! — Send identification. */
 static sdi12_err_t handle_identify(sdi12_sensor_ctx_t *ctx)
 {
-    snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-             "%c" SDI12_PROTOCOL_VERSION "%-8.8s%-6.6s%-3.3s%s\r\n",
-             ctx->address,
-             ctx->ident.vendor,
-             ctx->ident.model,
-             ctx->ident.firmware_version,
-             ctx->ident.serial);
+    sdi12_sbuf_t b;
+    sdi12_sbuf_init(&b, ctx->resp_buf, sizeof(ctx->resp_buf));
+    sdi12_sbuf_putc(&b, ctx->address);
+    sdi12_sbuf_puts(&b, SDI12_PROTOCOL_VERSION, SDI12_ID_VERSION_LEN);
+    sdi12_sbuf_field(&b, ctx->ident.vendor, SDI12_ID_VENDOR_LEN);
+    sdi12_sbuf_field(&b, ctx->ident.model, SDI12_ID_MODEL_LEN);
+    sdi12_sbuf_field(&b, ctx->ident.firmware_version, SDI12_ID_FWVER_LEN);
+    sdi12_sbuf_puts(&b, ctx->ident.serial, sizeof(ctx->ident.serial));
+    sdi12_sbuf_puts(&b, "\r\n", 2);
     send_response(ctx);
     return SDI12_OK;
 }
@@ -257,9 +300,6 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
     ctx->pending_meas_group = group;
 
     uint8_t n = count_group(ctx, group);
-    uint16_t family_max = (type == SDI12_MEAS_STANDARD ||
-                           type == SDI12_MEAS_VERIFICATION) ? 9u
-                        : (type == SDI12_MEAS_CONCURRENT)   ? 99u : 999u;
 
     /* If sensor has no data for this group, respond with zero.
      * §5.4: high-volume commands answer in the atttnnn form.
@@ -269,61 +309,31 @@ static sdi12_err_t handle_measurement(sdi12_sensor_ctx_t *ctx,
     if (n == 0) {
         ctx->data_available = false;
         ctx->data_cache_count = 0;
-        if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c0000\r\n", ctx->address);
-        } else if (type == SDI12_MEAS_HIGHVOL_ASCII ||
-                   type == SDI12_MEAS_HIGHVOL_BINARY) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000000\r\n", ctx->address);
-        } else {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c00000\r\n", ctx->address);
-        }
+        build_meas_reply(ctx, 0, 0, type);
         send_response(ctx);
         return SDI12_OK;
     }
 
-    /* Check if async measurement is supported */
     if (ctx->cb.start_measurement) {
         uint16_t ttt = ctx->cb.start_measurement(group, type, ctx->cb.user_data);
         if (ttt > 999) ttt = 999;
 
-        if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c%03u%u\r\n", ctx->address, ttt, n > 9 ? 9 : n);
-            ctx->state = (ttt > 0) ? SDI12_STATE_MEASURING : SDI12_STATE_DATA_READY;
-        } else if (type == SDI12_MEAS_CONCURRENT) {
-            uint16_t nn = n > 99 ? 99 : n;
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c%03u%02u\r\n", ctx->address, ttt, nn);
-            ctx->state = (ttt > 0) ? SDI12_STATE_MEASURING_C : SDI12_STATE_DATA_READY;
-        } else if (type == SDI12_MEAS_HIGHVOL_ASCII || type == SDI12_MEAS_HIGHVOL_BINARY) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c%03u%03u\r\n", ctx->address, ttt, (unsigned)n);
-            ctx->state = (ttt > 0) ? SDI12_STATE_MEASURING_C : SDI12_STATE_DATA_READY;
-        }
+        build_meas_reply(ctx, ttt, n, type);
 
         if (ttt == 0) {
             /* Synchronous — read now */
-            read_group_sync(ctx, group, family_max);
+            ctx->state = SDI12_STATE_DATA_READY;
+            read_group_sync(ctx, group, family_max(type));
         } else {
+            /* Only M/V finish with a service request */
+            ctx->state = (family_max(type) == 9) ? SDI12_STATE_MEASURING
+                                                 : SDI12_STATE_MEASURING_C;
             ctx->data_available = false;
         }
     } else {
         /* No async callback — synchronous measurement (ttt = 0) */
-        read_group_sync(ctx, group, family_max);
-
-        if (type == SDI12_MEAS_STANDARD || type == SDI12_MEAS_VERIFICATION) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000%u\r\n", ctx->address, n > 9 ? 9 : n);
-        } else if (type == SDI12_MEAS_CONCURRENT) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000%02u\r\n", ctx->address, n > 99 ? 99 : (int)n);
-        } else {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c000%03u\r\n", ctx->address, (unsigned)n);
-        }
+        read_group_sync(ctx, group, family_max(type));
+        build_meas_reply(ctx, 0, n, type);
         ctx->state = SDI12_STATE_DATA_READY;
     }
 
@@ -438,21 +448,14 @@ static sdi12_err_t handle_send_binary_data(sdi12_sensor_ctx_t *ctx,
 static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint16_t page)
 {
     if (!ctx->data_available) {
-        /* No data — respond with just address */
-        if (ctx->crc_requested) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c", ctx->address);
-            sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
-        } else {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
-        }
+        build_address_reply(ctx, ctx->address, ctx->crc_requested);
         send_response(ctx);
         return SDI12_OK;
     }
 
-    /* NOTE: raw binary via aDn! was removed — §5.2 retrieves binary
-     * data through aDBn! only, and §4.2's binary framing exception is
-     * scoped to that command. An aDn! after aHB! now serves the cached
-     * values in ordinary ASCII form, which is always spec-legal. */
+    /* aDn! always answers in ASCII, even after aHB!: §5.2 retrieves
+     * binary data only through aDBn!, and §4.2's binary framing
+     * exception covers only that command. */
 
     /* Determine max value chars based on measurement type */
     uint16_t max_chars = SDI12_M_VALUES_MAX_CHARS;
@@ -466,8 +469,6 @@ static sdi12_err_t handle_send_data(sdi12_sensor_ctx_t *ctx, uint16_t page)
     format_data_page(ctx, ctx->data_cache, ctx->data_cache_count,
                      page, max_chars, ctx->crc_requested);
     send_response(ctx);
-
-    /* After the last page is read, data could be retained until next M/C/V */
     return SDI12_OK;
 }
 
@@ -486,12 +487,7 @@ static sdi12_err_t handle_continuous(sdi12_sensor_ctx_t *ctx,
 
     if (n == 0) {
         /* Sensor doesn't support this continuous measurement */
-        if (with_crc) {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c", ctx->address);
-            sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
-        } else {
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
-        }
+        build_address_reply(ctx, ctx->address, with_crc);
         ctx->resp_len = 0;
         send_response(ctx);
         return SDI12_OK;
@@ -517,7 +513,7 @@ static sdi12_err_t handle_change_address(sdi12_sensor_ctx_t *ctx, char new_addr)
     if (!sdi12_valid_address(new_addr)) {
         /* Table 8: unable to change — respond with the ORIGINAL
          * address so the recorder learns the change failed. */
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
+        build_address_reply(ctx, ctx->address, false);
         send_response(ctx);
         return SDI12_OK;
     }
@@ -528,7 +524,7 @@ static sdi12_err_t handle_change_address(sdi12_sensor_ctx_t *ctx, char new_addr)
         ctx->cb.save_address(new_addr, ctx->cb.user_data);
     }
 
-    snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", new_addr);
+    build_address_reply(ctx, new_addr, false);
     send_response(ctx);
     return SDI12_OK;
 }
@@ -577,8 +573,7 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
     /* Check for parameter metadata request (contains '_') */
     const char *underscore = (const char *)memchr(cmd + 2, '_', len - 2);
     if (underscore) {
-        /* Parse nnn after '_': Table 20 defines exactly three digits.
-         * An unbounded digit run previously overflowed a signed int. */
+        /* Parse nnn after '_': Table 20 defines exactly three digits. */
         const char *p = underscore + 1;
         const char *cmd_end = cmd + len;
         if (cmd_end - p != 3) return SDI12_ERR_INVALID_COMMAND;
@@ -624,28 +619,22 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
         if (param_num >= 1 && param_num <= n) {
             uint8_t idx = indices[param_num - 1];
 
-            snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                     "%c,%s,%s;",
-                     ctx->address,
-                     ctx->params[idx].meta.shef,
-                     ctx->params[idx].meta.units);
+            sdi12_sbuf_t b;
+            sdi12_sbuf_init(&b, ctx->resp_buf, sizeof(ctx->resp_buf));
+            sdi12_sbuf_putc(&b, ctx->address);
+            sdi12_sbuf_putc(&b, ',');
+            sdi12_sbuf_puts(&b, ctx->params[idx].meta.shef,
+                            sizeof(ctx->params[idx].meta.shef));
+            sdi12_sbuf_putc(&b, ',');
+            sdi12_sbuf_puts(&b, ctx->params[idx].meta.units,
+                            sizeof(ctx->params[idx].meta.units));
+            sdi12_sbuf_putc(&b, ';');
 
-            if (crc) {
-                sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
-            } else {
-                size_t slen = strlen(ctx->resp_buf);
-                ctx->resp_buf[slen]     = '\r';
-                ctx->resp_buf[slen + 1] = '\n';
-                ctx->resp_buf[slen + 2] = '\0';
-            }
+            if (crc) sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
+            else     sdi12_sbuf_puts(&b, "\r\n", 2);
         } else {
             /* Invalid parameter number — respond with just address */
-            if (crc) {
-                snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c", ctx->address);
-                sdi12_crc_append(ctx->resp_buf, sizeof(ctx->resp_buf));
-            } else {
-                snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
-            }
+            build_address_reply(ctx, ctx->address, crc);
         }
         send_response(ctx);
         return SDI12_OK;
@@ -657,26 +646,12 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
      * must carry the same ttt the real command would report. There is
      * no aIR form (continuous measurements need no start command). */
     uint8_t group = 0;
+    sdi12_meas_type_t type;
 
     switch (subcmd) {
-    case 'M': {
-        /* aIM!, aIM1!–aIM9!, aIMC!, aIMC1!–aIMC9! */
-        bool crc_form = (len > 3 && cmd[3] == 'C');
-        size_t digit_pos = crc_form ? 4 : 3;
-        bool has_digit = (digit_pos < len &&
-                          cmd[digit_pos] >= '1' && cmd[digit_pos] <= '9');
-        if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
-        if (len != digit_pos + (has_digit ? 1u : 0u))
-            return SDI12_ERR_INVALID_COMMAND;
-
-        uint8_t n = count_group(ctx, group);
-        uint16_t ttt = identify_meas_ttt(ctx, group, SDI12_MEAS_STANDARD);
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c%03u%u", ctx->address, ttt, n > 9 ? 9 : n);
-    } break;
-
+    case 'M':
     case 'C': {
-        /* aIC!, aIC1!–aIC9!, aICC!, aICC1!–aICC9! */
+        /* aIM!, aIM1!–aIM9!, aIMC!, aIMC1!–aIMC9!, and the aIC forms */
         bool crc_form = (len > 3 && cmd[3] == 'C');
         size_t digit_pos = crc_form ? 4 : 3;
         bool has_digit = (digit_pos < len &&
@@ -684,46 +659,29 @@ static sdi12_err_t handle_identify_measurement(sdi12_sensor_ctx_t *ctx,
         if (has_digit) group = (uint8_t)(cmd[digit_pos] - '0');
         if (len != digit_pos + (has_digit ? 1u : 0u))
             return SDI12_ERR_INVALID_COMMAND;
-
-        uint8_t n = count_group(ctx, group);
-        uint16_t ttt = identify_meas_ttt(ctx, group, SDI12_MEAS_CONCURRENT);
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c%03u%02u", ctx->address, ttt, n > 99 ? 99 : n);
+        type = (subcmd == 'M') ? SDI12_MEAS_STANDARD : SDI12_MEAS_CONCURRENT;
     } break;
 
-    case 'V': {
+    case 'V':
         if (len != 3) return SDI12_ERR_INVALID_COMMAND;
-        uint8_t n = count_group(ctx, 0);
-        uint16_t ttt = identify_meas_ttt(ctx, 0, SDI12_MEAS_VERIFICATION);
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c%03u%u", ctx->address, ttt, n > 9 ? 9 : n);
-    } break;
+        type = SDI12_MEAS_VERIFICATION;
+        break;
 
-    case 'H': {
+    case 'H':
         /* aIHA!, aIHB! only */
         if (len != 4 || (cmd[3] != 'A' && cmd[3] != 'B'))
             return SDI12_ERR_INVALID_COMMAND;
-        sdi12_meas_type_t t = (cmd[3] == 'A') ? SDI12_MEAS_HIGHVOL_ASCII
-                                              : SDI12_MEAS_HIGHVOL_BINARY;
-        uint8_t n = count_group(ctx, 0);
-        uint16_t ttt = identify_meas_ttt(ctx, 0, t);
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf),
-                 "%c%03u%03u", ctx->address, ttt, (unsigned)n);
-    } break;
+        type = (cmd[3] == 'A') ? SDI12_MEAS_HIGHVOL_ASCII
+                               : SDI12_MEAS_HIGHVOL_BINARY;
+        break;
 
     default:
         /* Includes aIR…! — not in Table 19. Stay silent. */
         return SDI12_ERR_INVALID_COMMAND;
     }
 
-    {
-        size_t slen = strlen(ctx->resp_buf);
-        if (slen + 2 < sizeof(ctx->resp_buf)) {
-            ctx->resp_buf[slen]     = '\r';
-            ctx->resp_buf[slen + 1] = '\n';
-            ctx->resp_buf[slen + 2] = '\0';
-        }
-    }
+    uint8_t n = count_group(ctx, group);
+    build_meas_reply(ctx, identify_meas_ttt(ctx, group, type), n, type);
 
     send_response(ctx);
     return SDI12_OK;
@@ -773,7 +731,7 @@ static sdi12_err_t handle_extended(sdi12_sensor_ctx_t *ctx,
     }
 
     /* No handler found — respond with just address (fail-safe) */
-    snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
+    build_address_reply(ctx, ctx->address, false);
     send_response(ctx);
     return SDI12_OK;
 }
@@ -1128,14 +1086,10 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
     /* Store the values in the cache — capped at what the pending
      * measurement command could have promised (9/99/999), so the D
      * pages never deliver more values than the response declared. */
-    uint16_t family_max = (ctx->pending_meas_type == SDI12_MEAS_STANDARD ||
-                           ctx->pending_meas_type == SDI12_MEAS_VERIFICATION)
-                          ? 9u
-                        : (ctx->pending_meas_type == SDI12_MEAS_CONCURRENT)
-                          ? 99u : 999u;
+    uint16_t max = family_max(ctx->pending_meas_type);
     uint8_t n = count;
     if (n > SDI12_MAX_PARAMS) n = SDI12_MAX_PARAMS;
-    if (n > family_max) n = (uint8_t)family_max;
+    if (n > max) n = (uint8_t)max;
     if (n > 0) memcpy(ctx->data_cache, values, n * sizeof(sdi12_value_t));
     ctx->data_cache_count = n;
     ctx->data_available = true;
@@ -1144,7 +1098,7 @@ sdi12_err_t sdi12_sensor_measurement_done(sdi12_sensor_ctx_t *ctx,
     ctx->resp_len = 0;  /* text response — strlen is safe */
     if (ctx->state == SDI12_STATE_MEASURING) {
         /* Standard M/V — service request required */
-        snprintf(ctx->resp_buf, sizeof(ctx->resp_buf), "%c\r\n", ctx->address);
+        build_address_reply(ctx, ctx->address, false);
 
         if (ctx->cb.service_request) {
             ctx->cb.service_request(ctx->cb.user_data);

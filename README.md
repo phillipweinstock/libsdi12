@@ -13,7 +13,9 @@ recorder)** roles — with zero external dependencies.
   lines, master in 3
 - ✅ **Pure C11, no `malloc`** — all state lives in user-allocated context
   structs; UART, GPIO, and timing are abstracted behind callbacks
-- ✅ **192 tests** — unit + metamorphic/property-based, all runnable on
+- ✅ **No printf** — commands and responses are built by a small internal
+  byte-builder (`sdi12_fmt.h`), so no `printf` code links into your firmware
+- ✅ **195 tests** — unit + metamorphic/property-based, all runnable on
   desktop with no hardware and no external test framework
 - ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
   MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
@@ -86,7 +88,7 @@ binary API or rebuild with `-DSDI12_BIN_MAX_PAYLOAD=<smaller>` /
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 192 tests | ❌ | Minimal |
+| Test suite | 195 tests | ❌ | Minimal |
 
 ---
 
@@ -97,6 +99,7 @@ libsdi12/
 ├── libsdi12.h           # Convenience header — includes everything
 ├── sdi12.h              # Common types, constants, enums, CRC API
 ├── sdi12_easy.h         # ★ Beginner-friendly convenience macros
+├── sdi12_fmt.h          # Internal byte-builder (replaces snprintf)
 ├── sdi12_crc.c          # CRC-16-IBM implementation
 ├── sdi12_sensor.h       # Sensor (slave) API declarations
 ├── sdi12_sensor.c       # Sensor command parser & state machine
@@ -495,13 +498,13 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-**192 tests** run on desktop with no hardware and no external framework —
+**195 tests** run on desktop with no hardware and no external framework —
 the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 192 Tests 0 Failures
+./test_sdi12    # 195 Tests 0 Failures
 ```
 
 | Suite | Tests | What It Covers |

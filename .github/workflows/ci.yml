@@ -57,3 +57,27 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
+
+  no-stdio:
+    name: library has no stdio dependency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No stdio includes in library sources
+        run: |
+          # grep exits 0 on a match, 1 on none, 2 on error; only 1 passes.
+          rc=0
+          grep -nE '^\s*#\s*include\s*<stdio\.h>' sdi12*.c sdi12*.h libsdi12.h || rc=$?
+          if [ "$rc" -ne 1 ]; then
+            echo "ERROR: stdio include in library sources (grep rc=$rc)" >&2
+            exit 1
+          fi
+      - name: No stdio symbols in compiled library
+        run: |
+          gcc -std=c11 -O2 -c sdi12*.c
+          syms=$(nm -u sdi12*.o)
+          if printf '%s\n' "$syms" | grep -E 'printf|scanf|puts|putchar|fputc|fwrite|fopen|stdout|stderr'; then
+            echo "ERROR: library objects reference stdio" >&2
+            exit 1
+          fi
+          echo "OK: no stdio in library"
