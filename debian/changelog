@@ -1,3 +1,17 @@
+libsdi12 (0.5.4-1) unstable; urgency=medium
+
+  * New upstream release 0.5.4:
+    - The library no longer calls snprintf or any stdio function; an
+      internal byte-builder formats every command and response.
+    - A value that rounds to zero is sent as "+0.00", never "-0.00".
+    - sdi12_master_identify_param rejects param_num outside 1-999 at
+      once instead of timing out.
+    - sdi12_master_get_hv_binary_data leaves *out_type untouched on CRC
+      or address errors.
+    - Test suite grown from 192 to 195 tests.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Thu, 08 Oct 2026 05:07:09 +1100
+
 libsdi12 (0.5.3-1) unstable; urgency=medium
 
   * New upstream release 0.5.3 (third independent-review remediation):
