@@ -25,6 +25,7 @@ static inline void     hw_uart_write(const char *d, size_t n) { (void)d; (void)n
 static inline void     hw_uart_flush(void)                    { }
 static inline void     hw_gpio_set(int pin, int val)          { (void)pin; (void)val; }
 static inline uint32_t hw_millis(void)                        { return 0; }
+static inline void     hw_delay_ms(uint32_t ms)               { (void)ms; }
 static inline void     hw_disable_irq(void)                   { }
 static inline void     hw_enable_irq(void)                    { }
 static inline float    hw_adc_read(int ch)                    { (void)ch; return 0.0f; }
@@ -48,6 +49,7 @@ static volatile uint32_t g_meas_done_at  = 0;
 static void sdi_send(const char *data, size_t len, void *ud) {
     (void)ud;
     hw_gpio_set(DIR_PIN, 1);
+    hw_delay_ms(SDI12_MARKING_MS);  /* §7.0 marking before reply */
     hw_uart_write(data, len);
     hw_uart_flush();
     hw_gpio_set(DIR_PIN, 0);
@@ -61,6 +63,13 @@ static sdi12_value_t sdi_read(uint8_t idx, void *ud) {
         case 1: v.value = hw_adc_read(1); v.decimals = 1; break;
     }
     return v;
+}
+
+static uint16_t sdi_start(uint8_t group, sdi12_meas_type_t type, void *ud) {
+    (void)group; (void)type; (void)ud;
+    g_meas_pending = 1;
+    g_meas_done_at = hw_millis() + 500;  /* HW: start ADC / I2C / SPI here */
+    return 1;                            /* ttt = 1 s */
 }
 
 /* ── Sensor definition ─────────────────────────────────────────────── */
@@ -88,7 +97,7 @@ SDI12_SENSOR_DEFINE(sensor, '0',
 void UART_RX_IRQHandler(char byte_received) {
     if (g_cmd_ready) return;            /* previous not yet consumed  */
 
-    if (byte_received == '!' || byte_received == '?') {
+    if (byte_received == '!') {
         g_cmd_buf[g_cmd_len++] = byte_received;
         g_cmd_buf[g_cmd_len]   = '\0';
         g_cmd_ready = 1;
@@ -133,7 +142,7 @@ void app_init(void) {
     /* HW: configure DIR_PIN as output, default LOW (RX)               */
     /* HW: configure break-detect pin as input with pin-change IRQ     */
 
-    SDI12_SENSOR_SETUP(sensor);
+    SDI12_SENSOR_SETUP_ASYNC(sensor, sdi_start);
     SDI12_SENSOR_ADD_PARAM(sensor, 0, "TA", "degC", 2);
     SDI12_SENSOR_ADD_PARAM(sensor, 0, "RH", "%RH",  1);
 }
@@ -147,7 +156,6 @@ void app_main_loop(void) {
         g_break_flag  = 0;
         g_cmd_len     = 0;
         g_cmd_ready   = 0;
-        g_meas_pending = 0;
         hw_enable_irq();
 
         SDI12_SENSOR_BREAK(sensor);
@@ -168,19 +176,12 @@ void app_main_loop(void) {
         g_cmd_ready = 0;
         hw_enable_irq();
 
-        SDI12_SENSOR_PROCESS(sensor, local, len);
-
-        /* If M or C command, start async measurement hardware */
-        if (len >= 2 && (local[1] == 'M' || local[1] == 'C')) {
-            g_meas_pending = 1;
-            g_meas_done_at = hw_millis() + 500;  /* e.g. 500 ms ADC */
-            /* HW: start your ADC / I2C / SPI acquisition here */
-        }
+        SDI12_SENSOR_PROCESS(sensor, local, len);  /* M/C/V/H → sdi_start */
     }
 
     /*
      * 3. Async measurement complete → notify the library
-     *    This triggers the service request (a\r\n) to the master.
+     *    Service request follows for M/V only; ignored if a break aborted it.
      */
     if (g_meas_pending && hw_millis() >= g_meas_done_at) {
         g_meas_pending = 0;

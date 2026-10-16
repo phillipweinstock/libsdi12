@@ -121,6 +121,7 @@ extern void test_sensor_wide_values_reduce_precision_and_round(void);
 extern void test_sensor_malformed_vrd_ignored(void);
 extern void test_sensor_invalid_command_preserves_concurrent(void);
 extern void test_sensor_measurement_done_ignored_after_abort(void);
+extern void test_easy_sensor_setup_async(void);
 extern void test_sensor_new_measurement_clears_stale_data(void);
 extern void test_sensor_r_does_not_clobber_pending_crc(void);
 extern void test_sensor_rc_does_not_add_pending_crc(void);
@@ -441,6 +442,7 @@ int main(void)
     RUN_TEST(test_sensor_malformed_vrd_ignored);
     RUN_TEST(test_sensor_invalid_command_preserves_concurrent);
     RUN_TEST(test_sensor_measurement_done_ignored_after_abort);
+    RUN_TEST(test_easy_sensor_setup_async);
     RUN_TEST(test_sensor_new_measurement_clears_stale_data);
     RUN_TEST(test_sensor_r_does_not_clobber_pending_crc);
     RUN_TEST(test_sensor_rc_does_not_add_pending_crc);

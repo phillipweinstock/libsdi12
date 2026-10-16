@@ -27,6 +27,9 @@ static void uart_flush(void)                               { }
 /* TODO: Replace with your GPIO function */
 static void gpio_set_pin(int pin, int level)               { (void)pin; (void)level; }
 
+/* TODO: Replace with your blocking delay */
+static void delay_ms(uint32_t ms)                          { (void)ms; }
+
 /* TODO: Replace with your sensor read functions */
 static float read_temperature(void)                        { return 22.5f; }
 static float read_humidity(void)                           { return 55.3f; }
@@ -52,6 +55,7 @@ static void cb_send_response(const char *data, size_t len, void *user_data)
 {
     (void)user_data;
     gpio_set_pin(DIR_PIN, DIR_HIGH);    /* Switch to TX */
+    delay_ms(SDI12_MARKING_MS);         /* §7.0 marking before reply */
     uart_write(data, len);
     uart_flush();
     gpio_set_pin(DIR_PIN, DIR_LOW);     /* Switch back to RX */

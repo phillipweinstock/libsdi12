@@ -15,7 +15,7 @@ recorder)** roles — with zero external dependencies.
   structs; UART, GPIO, and timing are abstracted behind callbacks
 - ✅ **No printf** — commands and responses are built by a small internal
   byte-builder (`sdi12_fmt.h`), so no `printf` code links into your firmware
-- ✅ **195 tests** — unit + metamorphic/property-based, all runnable on
+- ✅ **196 tests** — unit + metamorphic/property-based, all runnable on
   desktop with no hardware and no external test framework
 - ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
   MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
@@ -70,6 +70,19 @@ fully §7-conformant data recorder additionally requires, **in your code**:
 - **Multi-line STX/ETX framing (§4.4.13.1)** — `sdi12_master_extended_multiline()`
   concatenates lines by timing gap and passes any STX/ETX bytes through raw.
 
+A sensor additionally requires, **in your code**:
+
+- **Pre-response marking (§7.0)** — `send_response` must hold the line
+  marking for 8.33 ms (`SDI12_MARKING_MS`) before the first byte; the
+  recorder may drive the line for up to 7.5 ms after its stop bit. The first
+  start bit must still begin within 15 ms of the command's stop bit.
+- **Fast reads** — for ttt = 000 and `aR!`, `read_param` runs inside
+  `sdi12_sensor_process()` before `send_response`, in the ~6.6 ms left after
+  the marking hold. Return cached values, or implement `start_measurement`
+  (`SDI12_SENSOR_SETUP_ASYNC` with the easy macros) and return ttt ≥ 1.
+- **Break detection (§7.0)** — detect ≥ 12 ms of spacing and call
+  `sdi12_sensor_break()`.
+
 **RAM budget note**: `sdi12_master_get_hv_binary_data()` uses a
 `SDI12_BIN_MAX_PAYLOAD + 2` (default 1002-byte) stack buffer, and the context
 structs are ~1.2 KB. On AVR-class targets (2 KB SRAM) avoid the high-volume
@@ -88,7 +101,7 @@ binary API or rebuild with `-DSDI12_BIN_MAX_PAYLOAD=<smaller>` /
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 195 tests | ❌ | Minimal |
+| Test suite | 196 tests | ❌ | Minimal |
 
 ---
 
@@ -157,9 +170,10 @@ Include `sdi12_easy.h` and get going in **4 lines**:
 #include "sdi12_easy.h"
 
 /* Write your 2 hardware functions once.
- * my_send owns TX/RX switching: TX, write, flush, back to RX. */
+ * my_send owns TX/RX switching: TX, hold marking, write, flush, back to RX. */
 void my_send(const char *d, size_t n, void *u) {
-    gpio_set(DIR, TX); uart_write(d, n); uart_flush(); gpio_set(DIR, RX);
+    gpio_set(DIR, TX); delay_ms(SDI12_MARKING_MS);
+    uart_write(d, n); uart_flush(); gpio_set(DIR, RX);
 }
 sdi12_value_t my_read(uint8_t i, void *u) {
     sdi12_value_t v = {0};
@@ -238,6 +252,7 @@ Implement an SDI-12 sensor that responds to commands from a data recorder.
  * Owns TX/RX switching: switch to TX, write, flush, switch back to RX. */
 void my_send(const char *data, size_t len, void *user_data) {
     uart_set_direction(TX);
+    delay_ms(SDI12_MARKING_MS);  /* §7.0 marking before reply */
     uart_write(data, len);
     uart_flush();
     uart_set_direction(RX);
@@ -498,13 +513,13 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-**195 tests** run on desktop with no hardware and no external framework —
+**196 tests** run on desktop with no hardware and no external framework —
 the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 195 Tests 0 Failures
+./test_sdi12    # 196 Tests 0 Failures
 ```
 
 | Suite | Tests | What It Covers |

@@ -42,14 +42,10 @@ static volatile uint32_t meas_done_at  = 0;         /* millis() when meas finish
 void sdi_send(const char *data, size_t len, void *ud) {
     (void)ud;
     digitalWrite(DIR_PIN, HIGH);        /* TX mode */
+    delay(SDI12_MARKING_MS);            /* §7.0 marking before reply */
     SDI12_UART.write(data, len);
     SDI12_UART.flush();                 /* wait for last byte out */
     digitalWrite(DIR_PIN, LOW);         /* back to RX */
-}
-
-void sdi_dir(sdi12_dir_t dir, void *ud) {
-    (void)ud;
-    digitalWrite(DIR_PIN, dir == SDI12_DIR_TX ? HIGH : LOW);
 }
 
 sdi12_value_t sdi_read(uint8_t idx, void *ud) {
@@ -62,11 +58,18 @@ sdi12_value_t sdi_read(uint8_t idx, void *ud) {
     return v;
 }
 
+uint16_t sdi_start(uint8_t group, sdi12_meas_type_t type, void *ud) {
+    (void)group; (void)type; (void)ud;
+    meas_pending = true;
+    meas_done_at = millis() + 500;      /* simulated 500 ms acquisition */
+    return 1;                           /* ttt = 1 s */
+}
+
 /* ── Sensor definition ─────────────────────────────────────────────── */
 
 SDI12_SENSOR_DEFINE(sensor, '0',
     "MYCO    ", "IRQ-01", "100", "SN-12345     ",
-    sdi_send, sdi_dir, sdi_read);
+    sdi_send, sdi_read);
 
 /* ── UART RX interrupt handler ─────────────────────────────────────── */
 /*
@@ -81,7 +84,7 @@ void serialEvent1() {
 
         if (cmd_ready) continue;        /* previous command not yet consumed */
 
-        if (c == '!' || c == '?') {
+        if (c == '!') {
             /* End of SDI-12 command */
             cmd_buf[cmd_len++] = c;
             cmd_buf[cmd_len]   = '\0';
@@ -127,7 +130,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(BREAK_PIN), breakISR, CHANGE);
 
     /* Initialise the sensor */
-    SDI12_SENSOR_SETUP(sensor);
+    SDI12_SENSOR_SETUP_ASYNC(sensor, sdi_start);
     SDI12_SENSOR_ADD_PARAM(sensor, 0, "TA", "degC", 2);  /* Analog A0 */
     SDI12_SENSOR_ADD_PARAM(sensor, 0, "RH", "%RH",  1);  /* Analog A1 */
 
@@ -145,7 +148,6 @@ void loop() {
         break_flag = false;
         cmd_len    = 0;
         cmd_ready  = false;
-        meas_pending = false;
         SDI12_SENSOR_BREAK(sensor);
         Serial.println("[IRQ] Break detected");
     }
@@ -170,22 +172,12 @@ void loop() {
         Serial.print("[IRQ] Command: ");
         Serial.println(local);
 
-        SDI12_SENSOR_PROCESS(sensor, local, len);
-
-        /*
-         * If this was an M or C command, simulate async measurement.
-         * In a real sensor you'd start your ADC / I2C / SPI reading here.
-         */
-        if (local[1] == 'M' || local[1] == 'C') {
-            meas_pending = true;
-            meas_done_at = millis() + 500;  /* simulated 500 ms acquisition */
-            Serial.println("[IRQ] Measurement started (500 ms)");
-        }
+        SDI12_SENSOR_PROCESS(sensor, local, len);  /* M/C/V/H → sdi_start */
     }
 
     /*
      * 3. Check if async measurement is complete
-     *    Notifies the library so it can send the service request.
+     *    Service request follows for M/V only; ignored if a break aborted it.
      */
     if (meas_pending && millis() >= meas_done_at) {
         meas_pending = false;
@@ -195,6 +187,6 @@ void loop() {
         vals[0].value = analogRead(A0) * 0.1f;  vals[0].decimals = 2;
         vals[1].value = analogRead(A1) * 0.05f; vals[1].decimals = 1;
         SDI12_SENSOR_MEAS_DONE(sensor, vals, 2);
-        Serial.println("[IRQ] Measurement complete -> service request sent");
+        Serial.println("[IRQ] Measurement complete");
     }
 }

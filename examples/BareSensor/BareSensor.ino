@@ -49,6 +49,7 @@ static sdi12_sensor_ctx_t sensor;
 static void cb_send_response(const char *data, size_t len, void *ud) {
     (void)ud;
     digitalWrite(DIR_PIN, HIGH);        /* TX mode */
+    delay(SDI12_MARKING_MS);            /* §7.0 marking before reply */
     SDI12_UART.write(data, len);
     SDI12_UART.flush();                 /* wait for all bytes */
     digitalWrite(DIR_PIN, LOW);         /* back to RX */

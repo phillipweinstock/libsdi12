@@ -31,6 +31,8 @@ extern "C" {
  * @brief Callback to read a single measurement parameter.
  *
  * The library calls this when it needs a sensor value (e.g. during aM!, aR!).
+ * For ttt = 000 and aR! it runs before send_response, inside the §7.0
+ * response window — return cached values.
  *
  * @param param_index  Index of the parameter (as registered).
  * @param user_data    User pointer passed during registration.
@@ -59,6 +61,7 @@ typedef uint16_t (*sdi12_start_measurement_fn)(uint8_t group,
  *
  * The library provides a fully formatted, CR/LF-terminated response.
  * The platform must switch to TX, send the bytes, then switch back to RX.
+ * §7.0: hold marking SDI12_MARKING_MS before the first byte.
  *
  * @param data  Null-terminated response string (includes CR/LF).
  * @param len   Length of response (excluding null terminator).

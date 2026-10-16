@@ -13,10 +13,11 @@
  * ──────────────────────────────────────────────────────────────────────
  *
  *   // 1. Tell the library how to talk to your hardware.
- *   //    my_send owns the TX/RX direction pin: switch to TX, write,
- *   //    flush, switch back to RX.
+ *   //    my_send owns the TX/RX direction pin: switch to TX, hold
+ *   //    marking, write, flush, switch back to RX.
  *   void my_send(const char *d, size_t n, void *u) {
  *       digitalWrite(2, HIGH);          // TX
+ *       delay(SDI12_MARKING_MS);        // §7.0 marking before reply
  *       Serial1.write(d, n);
  *       Serial1.flush();
  *       digitalWrite(2, LOW);           // RX
@@ -191,6 +192,19 @@ extern "C" {
         name##_cb.load_address  = (load_fn); \
         \
         sdi12_sensor_init(&name##_ctx, name##_addr, &name##_id, &name##_cb); \
+    } while (0)
+
+/**
+ * @brief SDI12_SENSOR_SETUP plus an async start_measurement callback.
+ *
+ * @param start_fn  uint16_t fn(uint8_t group, sdi12_meas_type_t type,
+ *                  void *user_data) — start acquisition, return ttt.
+ *                  Report results with SDI12_SENSOR_MEAS_DONE.
+ */
+#define SDI12_SENSOR_SETUP_ASYNC(name, start_fn) \
+    do { \
+        SDI12_SENSOR_SETUP(name); \
+        name##_ctx.cb.start_measurement = (start_fn); \
     } while (0)
 
 /**

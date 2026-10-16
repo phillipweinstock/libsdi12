@@ -1,6 +1,6 @@
 # Testing libsdi12
 
-libsdi12 ships with **195 tests** across 5 categories, all runnable on desktop
+libsdi12 ships with **196 tests** across 5 categories, all runnable on desktop
 without any hardware, SDI-12 bus, or external test framework.
 
 ---
@@ -30,7 +30,7 @@ Output:
   PASS: test_meta_parse_meas_address_passthrough
 
 -----------------------
-195 Tests 0 Failures 0 Ignored
+196 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -141,7 +141,7 @@ Tests the `sdi12_valid_address()` function.
 | `test_invalid_boundaries` | Chars adjacent to valid ranges are invalid |
 | `test_total_valid_count` | Exactly 62 valid addresses in ASCII range |
 
-### 3. Sensor (Slave) Tests — `test_sensor.c` (80 tests)
+### 3. Sensor (Slave) Tests — `test_sensor.c` (82 tests)
 
 Tests the complete sensor command parser and state machine.
 
@@ -169,7 +169,7 @@ Tests the complete sensor command parser and state machine.
 | Overlong values | 1 | Values longer than 9 chars clamped, no garbage on the bus |
 | NULL guard | 1 | `measurement_done(NULL, n)` returns an error instead of crashing |
 
-### 4. Master (Data Recorder) Tests — `test_master.c` (69 tests)
+### 4. Master (Data Recorder) Tests — `test_master.c` (71 tests)
 
 Tests the pure parsing functions plus full transactions against scripted I/O.
 

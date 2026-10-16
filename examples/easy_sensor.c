@@ -15,8 +15,9 @@
 
 void my_send(const char *data, size_t len, void *ud) {
     (void)ud;
-    /* TODO: switch your direction pin to TX, transmit data on your
-     * SDI-12 UART, flush, then switch back to RX */
+    /* TODO: switch your direction pin to TX, hold marking for
+     * SDI12_MARKING_MS (§7.0), transmit data on your SDI-12 UART,
+     * flush, then switch back to RX */
     (void)data; (void)len;
 }
 

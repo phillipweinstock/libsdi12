@@ -26,6 +26,7 @@
 #include <string.h>
 #include "sdi12.h"
 #include "sdi12_sensor.h"
+#include "sdi12_easy.h"
 
 /* ── Mock infrastructure ────────────────────────────────────────────────── */
 
@@ -1612,4 +1613,29 @@ void test_sensor_binary_callback_buflen_is_honest(void)
     size_t embedded = (uint8_t)mock_response[4] |
                       ((size_t)(uint8_t)mock_response[5] << 8);
     TEST_ASSERT_EQUAL(embedded, psz);
+}
+
+/* ── Easy API: async setup ──────────────────────────────────────────────── */
+
+static uint16_t easy_start_meas(uint8_t group, sdi12_meas_type_t type, void *ud)
+{
+    (void)group; (void)type; (void)ud;
+    return 1;
+}
+
+SDI12_SENSOR_DEFINE(easy_async, '0', "VENDOR", "MODEL", "100", "SN",
+                    mock_send_response, mock_read_param);
+
+void test_easy_sensor_setup_async(void)
+{
+    reset_mocks();
+    SDI12_SENSOR_SETUP_ASYNC(easy_async, easy_start_meas);
+    SDI12_SENSOR_ADD_PARAM(easy_async, 0, "TA", "C", 1);
+
+    SDI12_SENSOR_PROCESS(easy_async, "0M!", 3);
+    TEST_ASSERT_EQUAL_STRING("00011\r\n", mock_response);
+
+    sdi12_value_t v = {9.5f, 1};
+    TEST_ASSERT_EQUAL(SDI12_OK, SDI12_SENSOR_MEAS_DONE(easy_async, &v, 1));
+    TEST_ASSERT_EQUAL_STRING("0\r\n", mock_response);  /* service request */
 }

@@ -15,6 +15,7 @@
 void my_send(const char *data, size_t len, void *ud) {
     (void)ud;
     digitalWrite(2, HIGH);          /* TX mode */
+    delay(SDI12_MARKING_MS);        /* §7.0 marking before reply */
     Serial1.write(data, len);
     Serial1.flush();
     digitalWrite(2, LOW);           /* back to RX */
