@@ -314,9 +314,13 @@ finishes and commits that separately before this work starts.
   `delay_ms` is a ~10 µs no-op (`hal_loopback.c:442`), so wall-clock wake
   latency can't be modelled; instead the loopback records the *requested*
   post-break delay and the simulated sensor ignores the next command when it
-  was below N ms. A fault self-test asserts the probe FAILs and reports a
-  marking margin that covers N. If that can't be done cleanly, drop this one
-  test rather than fake it.
+  was below N ms. A fault self-test asserts the probe PASSes with a note and
+  a marking margin that covers N (slow but compliant wake). If that can't be
+  done cleanly, drop this one test rather than fake it.
+- Second new loopback fault: a late-replying sensor whose response is held
+  back by wall-clock time past the first-byte deadline (like the existing
+  `LB_FAULT_PACED_UART`). A fault self-test asserts the probe FAILs and
+  reports a reply margin that covers the hold-back.
 
 ### Docs and versioning
 
