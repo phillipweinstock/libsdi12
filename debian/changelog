@@ -1,3 +1,12 @@
+libsdi12 (0.6.1-1) unstable; urgency=medium
+
+  * New upstream release 0.6.1:
+    - Same library code as 0.6.0. The PlatformIO package now excludes
+      local tooling and notes; the 0.6.0 PlatformIO upload included them
+      and was withdrawn.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Sat, 17 Oct 2026 03:57:05 +1100
+
 libsdi12 (0.6.0-1) unstable; urgency=medium
 
   * New upstream release 0.6.0:
