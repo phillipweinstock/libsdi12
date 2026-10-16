@@ -13,10 +13,12 @@
  */
 #include "sdi12_test.h"
 #include <locale.h>
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 #include "sdi12.h"
 #include "sdi12_master.h"
+#include "sdi12_easy.h"
 
 /* ── Measurement Response Parsing ───────────────────────────────────────── */
 
@@ -246,6 +248,9 @@ static size_t m_reply_pos;
 static bool   m_line_mode;    /* recv returns at most one line per call */
 static int    m_break_count;
 static uint32_t m_last_timeout;
+static uint32_t m_first_timeout;
+static int      m_recv_calls;
+static uint32_t m_last_delay;
 
 static void m_send(const char *data, size_t len, void *user_data)
 {
@@ -262,6 +267,7 @@ static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data
 {
     (void)user_data;
     m_last_timeout = timeout_ms;
+    if (m_recv_calls++ == 0) m_first_timeout = timeout_ms;
     size_t remain = m_reply_len - m_reply_pos;
     size_t n = remain < max ? remain : max;
     if (m_line_mode) {
@@ -277,13 +283,14 @@ static size_t m_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data
 
 static void m_dir(sdi12_dir_t dir, void *user_data) { (void)dir; (void)user_data; }
 static void m_brk(void *user_data)                  { (void)user_data; m_break_count++; }
-static void m_dly(uint32_t ms, void *user_data)     { (void)ms; (void)user_data; }
+static void m_dly(uint32_t ms, void *user_data)     { (void)user_data; m_last_delay = ms; }
 
 static sdi12_master_ctx_t make_scripted_master(void)
 {
     m_reply_len = m_reply_pos = 0;
     m_line_mode = false;
     m_break_count = 0;
+    m_recv_calls = 0;
     m_last_cmd[0] = '\0';
 
     sdi12_master_ctx_t m;
@@ -303,6 +310,7 @@ static void set_reply(const char *s)
     m_reply_len = strlen(s);
     memcpy(m_reply, s, m_reply_len);
     m_reply_pos = 0;
+    m_recv_calls = 0;
 }
 
 static void set_reply_bin(const void *data, size_t len)
@@ -310,6 +318,7 @@ static void set_reply_bin(const void *data, size_t len)
     memcpy(m_reply, data, len);
     m_reply_len = len;
     m_reply_pos = 0;
+    m_recv_calls = 0;
 }
 
 /** Build a §5.2 Table 14 packet: addr + size(2 LE) + type + payload + CRC(2 LE). */
@@ -869,10 +878,7 @@ void test_master_change_address_allows_persist_time(void)
 
     sdi12_master_change_address(&m, '0', '5');
 
-    /* §4.4.4: the sensor may take up to one second to persist its new
-     * address before responding — a 15 ms first-byte window false-fails
-     * every EEPROM-writing sensor. */
-    TEST_ASSERT_TRUE(m_last_timeout >= 1000);
+    TEST_ASSERT_TRUE(m_last_timeout >= 1000);  /* slow EEPROM writers */
 }
 
 void test_master_bintype_sizes(void)
@@ -1050,4 +1056,202 @@ void test_master_oversized_xcmd_rejected(void)
         &m, '0', "THIS_BODY_IS_FAR_TOO_LONG_FOR_A_COMMAND",
         out, &out_len, 100));
     TEST_ASSERT_EQUAL_STRING("", m_last_cmd);
+}
+
+/* ── First-byte deadline (§7.0) ─────────────────────────────────────────── */
+
+void test_master_first_byte_deadline_25ms(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");
+
+    bool present = false;
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_acknowledge(&m, '0', &present));
+    TEST_ASSERT_EQUAL(25, SDI12_FIRST_BYTE_TIMEOUT_MS);
+    TEST_ASSERT_EQUAL(SDI12_FIRST_BYTE_TIMEOUT_MS, m_first_timeout);
+}
+
+void test_master_hv_binary_continuation_keeps_15ms(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    float vals[2] = { 1.5f, -2.25f };
+    char pkt[64];
+    set_reply_bin(pkt, make_bin_packet(pkt, '0', SDI12_BINTYPE_FLOAT32,
+                                       vals, sizeof(vals)));
+
+    sdi12_bintype_t type;
+    float out[4];
+    size_t out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_get_hv_binary_data(
+        &m, '0', 0, &type, out, &out_len));
+    TEST_ASSERT_EQUAL(SDI12_FIRST_BYTE_TIMEOUT_MS, m_first_timeout);
+    TEST_ASSERT_EQUAL(SDI12_RESPONSE_TIMEOUT_MS, m_last_timeout);
+}
+
+void test_master_change_address_waits_1025ms(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("1\r\n");
+
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_change_address(&m, '0', '1'));
+    TEST_ASSERT_EQUAL(SDI12_ADDRESS_CHANGE_DELAY_MS + SDI12_FIRST_BYTE_TIMEOUT_MS,
+                      m_first_timeout);
+}
+
+void test_master_transact_explicit_timeout_exact(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0\r\n");
+
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_transact(&m, "0!", 200));
+    TEST_ASSERT_EQUAL(200, m_first_timeout);
+}
+
+void test_master_multiline_gap_covers_first_char(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    set_reply("0L1\r\n0L2\r\n");
+    m_line_mode = true;
+
+    char out[64];
+    size_t out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_extended_multiline(
+        &m, '0', "DUMP", out, sizeof(out), &out_len, NULL, 1000));
+    TEST_ASSERT_EQUAL(160, SDI12_MULTILINE_FIRST_BYTE_MS);
+    TEST_ASSERT_EQUAL(SDI12_MULTILINE_FIRST_BYTE_MS, m_last_timeout);
+}
+
+/* ── Timing margins ─────────────────────────────────────────────────────── */
+
+void test_master_margins_default_zero(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(0, m.marking_margin_ms);
+    TEST_ASSERT_EQUAL(0, m.response_margin_ms);
+}
+
+void test_master_marking_margin_extends_break_marking(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_set_timing_margin(&m, 5, 0));
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_send_break(&m));
+    TEST_ASSERT_EQUAL(SDI12_MARKING_MS + 5, m_last_delay);
+}
+
+void test_master_response_margin_extends_first_byte(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_set_timing_margin(&m, 0, 7));
+
+    bool present = false;
+    set_reply("0\r\n");
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_acknowledge(&m, '0', &present));
+    TEST_ASSERT_EQUAL(SDI12_FIRST_BYTE_TIMEOUT_MS + 7, m_first_timeout);
+
+    set_reply("1\r\n");
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_change_address(&m, '0', '1'));
+    TEST_ASSERT_EQUAL(SDI12_ADDRESS_CHANGE_DELAY_MS + SDI12_FIRST_BYTE_TIMEOUT_MS + 7,
+                      m_first_timeout);
+
+    float vals[2] = { 1.5f, -2.25f };
+    char pkt[64];
+    set_reply_bin(pkt, make_bin_packet(pkt, '0', SDI12_BINTYPE_FLOAT32,
+                                       vals, sizeof(vals)));
+    sdi12_bintype_t type;
+    float out[4];
+    size_t out_len = sizeof(out);
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_get_hv_binary_data(
+        &m, '0', 0, &type, out, &out_len));
+    TEST_ASSERT_EQUAL(SDI12_FIRST_BYTE_TIMEOUT_MS + 7, m_first_timeout);
+    TEST_ASSERT_EQUAL(SDI12_RESPONSE_TIMEOUT_MS, m_last_timeout);
+}
+
+void test_master_marking_default_is_spec(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_send_break(&m));
+    TEST_ASSERT_EQUAL(SDI12_MARKING_MS, m_last_delay);
+}
+
+/* Every library-timed reply gets the first-byte deadline + margin. */
+#define EXPECT_FIRST_BYTE(reply, call) do { \
+    set_reply(reply); m_first_timeout = 0; (void)(call); \
+    TEST_ASSERT_EQUAL(SDI12_FIRST_BYTE_TIMEOUT_MS + 7, m_first_timeout); \
+} while (0)
+
+void test_master_response_margin_reaches_every_reply(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_set_timing_margin(&m, 0, 7));
+
+    char a;
+    bool present;
+    sdi12_ident_t id;
+    sdi12_meas_response_t mr;
+    sdi12_data_response_t dr;
+    sdi12_param_meta_response_t pr;
+    char raw[96];
+    size_t raw_len = sizeof(raw);
+
+    EXPECT_FIRST_BYTE("0\r\n", sdi12_master_query_address(&m, &a));
+    EXPECT_FIRST_BYTE("0\r\n", sdi12_master_acknowledge(&m, '0', &present));
+    EXPECT_FIRST_BYTE("0\r\n", sdi12_master_identify(&m, '0', &id));
+    EXPECT_FIRST_BYTE("00011\r\n", sdi12_master_start_measurement(
+        &m, '0', SDI12_MEAS_STANDARD, 0, false, &mr));
+    EXPECT_FIRST_BYTE("00011\r\n", sdi12_master_verify(&m, '0', &mr));
+    EXPECT_FIRST_BYTE("0+1\r\n", sdi12_master_get_data(&m, '0', 0, false, &dr));
+    EXPECT_FIRST_BYTE("0+1\r\n", sdi12_master_continuous(&m, '0', 0, false, &dr));
+    EXPECT_FIRST_BYTE("00059\r\n", sdi12_master_identify_measurement(
+        &m, '0', "M", SDI12_MEAS_STANDARD, &mr));
+    EXPECT_FIRST_BYTE("0,TA,degC;\r\n", sdi12_master_identify_param(
+        &m, '0', "M", 1, &pr));
+    EXPECT_FIRST_BYTE("0+1\r\n", sdi12_master_get_hv_data(&m, '0', 0, raw, &raw_len));
+}
+
+void test_master_margin_skips_explicit_transact(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_set_timing_margin(&m, 0, 7));
+    set_reply("0\r\n");
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_transact(&m, "0!", 200));
+    TEST_ASSERT_EQUAL(200, m_first_timeout);
+}
+
+void test_master_set_margin_limits(void)
+{
+    sdi12_master_ctx_t m = make_scripted_master();
+    TEST_ASSERT_EQUAL(SDI12_OK, sdi12_master_set_timing_margin(&m, 78, 62));
+    TEST_ASSERT_EQUAL(78, m.marking_margin_ms);
+    TEST_ASSERT_EQUAL(62, m.response_margin_ms);
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND, sdi12_master_set_timing_margin(&m, 79, 0));
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND, sdi12_master_set_timing_margin(&m, 0, 63));
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND, sdi12_master_set_timing_margin(&m, 255, 255));
+    TEST_ASSERT_EQUAL(78, m.marking_margin_ms);
+    TEST_ASSERT_EQUAL(62, m.response_margin_ms);
+
+    TEST_ASSERT_EQUAL(SDI12_ERR_INVALID_COMMAND, sdi12_master_set_timing_margin(NULL, 0, 0));
+}
+
+SDI12_MASTER_DEFINE(easy_rec, m_send, m_recv, m_dir, m_brk, m_dly);
+
+void test_master_margin_easy_macro(void)
+{
+    SDI12_MASTER_SETUP(easy_rec);
+    TEST_ASSERT_EQUAL(SDI12_OK, SDI12_MASTER_MARGIN(easy_rec, 3, 4));
+    TEST_ASSERT_EQUAL(3, SDI12_MASTER_CTX(easy_rec)->marking_margin_ms);
+    TEST_ASSERT_EQUAL(4, SDI12_MASTER_CTX(easy_rec)->response_margin_ms);
+}
+
+void test_master_ctx_layout_unchanged(void)
+{
+    struct ctx_v054 {
+        sdi12_master_callbacks_t cb;
+        char   cmd_buf[SDI12_CMD_MAX_CHARS + 4];
+        char   resp_buf[SDI12_RESP_MAX_CHARS + 4];
+        size_t resp_len;
+    };
+    TEST_ASSERT_EQUAL(sizeof(struct ctx_v054), sizeof(sdi12_master_ctx_t));
+    TEST_ASSERT_EQUAL(offsetof(struct ctx_v054, resp_len),
+                      offsetof(sdi12_master_ctx_t, resp_len));
 }

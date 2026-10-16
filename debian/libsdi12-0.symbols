@@ -21,6 +21,7 @@ libsdi12.so.0 libsdi12-0 #MINVER#
  sdi12_master_parse_meas_response@Base 0.3.0
  sdi12_master_query_address@Base 0.3.0
  sdi12_master_send_break@Base 0.3.0
+ sdi12_master_set_timing_margin@Base 0.6.0
  sdi12_master_start_measurement@Base 0.3.0
  sdi12_master_transact@Base 0.3.0
  sdi12_master_verify@Base 0.3.0

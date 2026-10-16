@@ -301,6 +301,10 @@ extern "C" {
 #define SDI12_MASTER_BREAK(name) \
     sdi12_master_send_break(&name##_ctx)
 
+/** @brief Set timing margins (ms) for slow sensors; see sdi12_master_set_timing_margin. */
+#define SDI12_MASTER_MARGIN(name, mark, resp) \
+    sdi12_master_set_timing_margin(&name##_ctx, (mark), (resp))
+
 /** @brief Check if a sensor is present at an address. Returns bool via `present`. */
 #define SDI12_MASTER_PING(name, addr, present) \
     sdi12_master_acknowledge(&name##_ctx, (addr), (present))

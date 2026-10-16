@@ -21,6 +21,13 @@ replying within 15 ms), so bumping them silently pushes sensor builds out of spe
 The verifier should be able to say *how far* out of spec a sensor's wake-up is,
 rather than just "no response".
 
+> **Amendment (2026-10-17, spec oracle review):** both first-byte deadlines
+> carry +1 ms so ports timing with a 1 ms tick (`millis() - t < wait`, AVR's
+> 1.024 ms tick) don't cut a compliant first byte at 23.73 ms: reply deadline
+> **25 ms**, multi-line **160 ms**; reply margin limit therefore **62**.
+> Compile-time margin defaults are checked against 87 ms with `#error`.
+> Example break callbacks no longer add their own marking.
+
 ## Spec facts this design rests on (SDI-12 v1.4, 2023-02-20)
 
 Checked against the PDF (`~/Downloads/SDI-12 Specification 1.4 February 20 2023.pdf`):
@@ -91,7 +98,7 @@ commits, so a 0.5.5 can still be cut from that point if Part 2 stalls.
 
 Today every library-internal reply wait passes `SDI12_RESPONSE_TIMEOUT_MS`
 (15) as the recv first-byte deadline. Per the spec facts above, a compliant
-sensor's first byte is observable only 16.67–23.73 ms after the command, so on
+sensor's first byte is observable only 16.26–23.73 ms after the command, so on
 real UART hardware every compliant reply times out. (The loopback self-test
 hides this: its delays don't wait.)
 

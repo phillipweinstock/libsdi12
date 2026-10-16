@@ -1,6 +1,6 @@
 # Testing libsdi12
 
-libsdi12 ships with **196 tests** across 5 categories, all runnable on desktop
+libsdi12 ships with **210 tests** across 5 categories, all runnable on desktop
 without any hardware, SDI-12 bus, or external test framework.
 
 ---
@@ -30,7 +30,7 @@ Output:
   PASS: test_meta_parse_meas_address_passthrough
 
 -----------------------
-196 Tests 0 Failures 0 Ignored
+210 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -169,7 +169,7 @@ Tests the complete sensor command parser and state machine.
 | Overlong values | 1 | Values longer than 9 chars clamped, no garbage on the bus |
 | NULL guard | 1 | `measurement_done(NULL, n)` returns an error instead of crashing |
 
-### 4. Master (Data Recorder) Tests — `test_master.c` (71 tests)
+### 4. Master (Data Recorder) Tests — `test_master.c` (85 tests)
 
 Tests the pure parsing functions plus full transactions against scripted I/O.
 
@@ -178,6 +178,8 @@ Tests the pure parsing functions plus full transactions against scripted I/O.
 | Measurement response | 10 | `atttn` (M), `atttnn` (C), `atttnnn` (H), edge cases |
 | Data values | 11 | `+/-nn.nnn` extraction, CRC strip, capacity, NULL safety |
 | Scripted transactions | 4 | `get_data` CRC verified/corrupt, wrong-address rejection (mock send/recv callbacks) |
+| First-byte deadlines | 5 | 25 ms reply deadline, 160 ms multi-line gap, binary continuation keeps 15 ms, explicit timeouts exact |
+| Timing margins | 9 | Defaults, marking/reply margins applied at every reply, 87 ms limits, easy macro, struct layout unchanged |
 
 ### 5. Metamorphic / Property-Based Tests — `test_metamorphic.c` (19 tests)
 

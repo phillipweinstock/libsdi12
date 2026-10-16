@@ -75,21 +75,21 @@ static void sdi_send(const char *data, size_t len, void *ud) {
     hw_gpio_set(DIR_PIN, 0);
 }
 
-/*
- * Receive callback: drain bytes from the ISR ring buffer until
- * a newline arrives or the timeout expires.  This is called by the
- * library from main-loop context (never from an ISR).
- */
+#define RX_IDLE_MS 20   /* §7.0: ≤1.66 ms gap + 8.33 ms char, with slack */
+
+/* Main-loop context: first byte within timeout_ms, then to LF or idle. */
 static size_t sdi_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud) {
     (void)ud;
-    uint32_t start = hw_millis();
     size_t pos = 0;
+    uint32_t t = hw_millis();
+    uint32_t wait = timeout_ms;               /* first byte */
 
-    while ((hw_millis() - start) < timeout_ms && pos < max) {
+    while (pos < max && hw_millis() - t < wait) {
         if (rx_available() > 0) {
-            char c = rx_pop();
-            buf[pos++] = c;
-            if (c == '\n') break;
+            buf[pos++] = rx_pop();
+            if (buf[pos - 1] == '\n') break;
+            t = hw_millis();
+            wait = RX_IDLE_MS;
         }
     }
     return pos;

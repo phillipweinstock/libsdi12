@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-17-timing-margins-design.md`
 
+> **Amended after Part A review:** first-byte deadline 25 ms, multi-line 160 ms, reply-margin limit 62; Part B must also apply the ledger's Task 6 rulings (late retry just past 100 ms, any reply margin = FAIL, adapter-latency hint).
+
 Repos: `L` = `/home/phillip/Documents/Projects/libsdi12`, `V` = `/home/phillip/Documents/Projects/libsdi12-verifier`.
 
 ## Global Constraints
@@ -326,7 +328,7 @@ git commit -am "fix: single post-break marking; first-byte waits use libsdi12's 
 
 - [ ] **Step 1: Implement the probe**
 
-Constants: `PROBE_TRIES 3`, `PROBE_STEP_MS 2`, `LATE_RETRY_GAP_MS 50`, `LATE_RETRIES 3`. The limits are `SDI12_MARKING_TIMEOUT_MS - SDI12_MARKING_MS` (78) and `SDI12_MARKING_TIMEOUT_MS - SDI12_FIRST_BYTE_TIMEOUT_MS` (63).
+Constants: `PROBE_TRIES 3`, `PROBE_STEP_MS 2`, `LATE_RETRY_GAP_MS 50`, `LATE_RETRIES 3`. The limits are `SDI12_MARKING_TIMEOUT_MS - SDI12_MARKING_MS` (78) and `SDI12_MARKING_TIMEOUT_MS - SDI12_FIRST_BYTE_TIMEOUT_MS` (62).
 
 An attempt at (m, r) does `set_timing_margin(m, r)`, then `send_break`, then `sdi12_master_acknowledge`. It succeeds when the result is OK and the sensor is present. (m, r) **works** when `PROBE_TRIES` attempts all succeed, stopping at the first miss.
 
@@ -335,10 +337,10 @@ s0 = successes of PROBE_TRIES attempts at (0,0)
 if s0 == 3                      → PASS "Wakes and replies at spec timing"
 find first working margin, PROBE_STEP_MS steps, each phase up to its limit:
    phase 1: (m, 0) m = 2..78
-   phase 2: (0, r) r = 2..63
-   phase 3: (k, k) k = 2..63
+   phase 2: (0, r) r = 2..62
+   phase 3: (k, k) k = 2..62
 found (m, 0)                    → PASS "Missed the command at minimum marking; answers with +%u ms (wake within §7.0's 100 ms)"
-found with r > 0 and s0 == 0    → FAIL "Reply starts late: needs +%u ms past the 24 ms first-byte deadline; §7.0 allows 15 ms (+0.40)"
+found with r > 0 and s0 == 0    → FAIL "Reply starts late: needs +%u ms past the 25 ms first-byte deadline; §7.0 allows 15 ms (+0.40)"
 found with r > 0 and s0 > 0     → PASS "Intermittent at spec timing (%d/3 replies); stable with +%u ms marking, +%u ms reply"
 not found: set (78,0); send_break; up to LATE_RETRIES acknowledges, each preceded by
    delay(LATE_RETRY_GAP_MS) except the first        (§7.2: last retry > 100 ms after break)
@@ -394,7 +396,7 @@ git commit -m "feat: wake/reply probe before the sensor suite; report lenient ru
 Every test ends with `hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE)` and `sdi12_master_set_timing_margin(timing_master(ctx), 0, 0)`. It captures the margins before that reset.
 
 - `fault_slow_wake`: probe status PASS, captured marking > 0, reply 0. Other HAL delays between break end and the command also count toward `wake_ms`, so don't assert an exact margin.
-- `fault_late_reply`: probe status FAIL, captured reply ≥ `LB_LATE_REPLY_MS - SDI12_FIRST_BYTE_TIMEOUT_MS` (26).
+- `fault_late_reply`: probe status FAIL, captured reply ≥ `LB_LATE_REPLY_MS - SDI12_FIRST_BYTE_TIMEOUT_MS` (25).
 - `fault_probe_absent`: probe `addr == '9' ? '8' : '9'` (an address the loopback doesn't answer). Expect status FAIL, margins after the run (0, 0), and elapsed `micros` < 30 s.
 - `fault_probe_cleanup` (register last): margins (0, 0), and `sdi12_master_acknowledge` at `addr` succeeds.
 

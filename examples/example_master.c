@@ -26,11 +26,10 @@ static void platform_send(const char *data, size_t len, void *ud)
     /* uart_write(data, len); uart_flush(); */
 }
 
-/* TODO: Receive bytes with timeout. Return number of bytes read. */
 static size_t platform_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud)
 {
     (void)ud; (void)buf; (void)max; (void)timeout_ms;
-    /* return uart_read_until_crlf(buf, max, timeout_ms); */
+    /* TODO: wait ≤ timeout_ms for the first byte, then read to LF with a short idle timeout */
     return 0;
 }
 
@@ -41,11 +40,11 @@ static void platform_set_dir(sdi12_dir_t dir, void *ud)
     /* gpio_write(DIR_PIN, dir == SDI12_DIR_TX ? 1 : 0); */
 }
 
-/* TODO: Hold the bus in spacing state for ≥12ms */
 static void platform_break(void *ud)
 {
     (void)ud;
-    /* gpio_hold_high(SDI12_PIN, 12); */
+    /* TODO: set direction to TX first, then hold spacing ≥ SDI12_BREAK_MS */
+    /* gpio_hold_high(SDI12_PIN, SDI12_BREAK_MS); */
 }
 
 /* TODO: Blocking delay */

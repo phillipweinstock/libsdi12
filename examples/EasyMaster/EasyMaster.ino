@@ -20,15 +20,19 @@ void my_send(const char *data, size_t len, void *ud) {
     digitalWrite(2, LOW);
 }
 
+#define RX_IDLE_MS 20   /* §7.0: ≤1.66 ms gap + 8.33 ms char, with slack */
+
 size_t my_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud) {
     (void)ud;
-    unsigned long start = millis();
     size_t pos = 0;
-    while (millis() - start < timeout_ms && pos < max) {
+    unsigned long t = millis();
+    uint32_t wait = timeout_ms;               /* first byte */
+    while (pos < max && millis() - t < wait) {
         if (Serial1.available()) {
-            char c = Serial1.read();
-            buf[pos++] = c;
-            if (c == '\n') break;
+            buf[pos++] = Serial1.read();
+            if (buf[pos - 1] == '\n') break;
+            t = millis();
+            wait = RX_IDLE_MS;
         }
     }
     return pos;
@@ -41,14 +45,13 @@ void my_dir(sdi12_dir_t dir, void *ud) {
 
 void my_break(void *ud) {
     (void)ud;
-    /* Send a break: hold line HIGH (spacing) for ≥12 ms */
+    /* §7.0: spacing ≥ 12 ms; the library adds post-break marking */
     digitalWrite(2, HIGH);
     Serial1.end();
     pinMode(1, OUTPUT);       /* TX pin → manual control */
     digitalWrite(1, HIGH);    /* spacing = high for inverted logic */
     delay(15);
     digitalWrite(1, LOW);
-    delay(9);                 /* marking after break ≥ 8.33 ms */
     Serial1.begin(1200, SERIAL_7E1);
     digitalWrite(2, LOW);
 }

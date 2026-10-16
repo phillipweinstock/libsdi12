@@ -27,6 +27,19 @@
 
 #include "sdi12.h"
 
+/* Default timing margins (ms), applied at init; source builds only. */
+#ifndef SDI12_MASTER_MARKING_MARGIN_MS
+#define SDI12_MASTER_MARKING_MARGIN_MS  0
+#endif
+#ifndef SDI12_MASTER_RESPONSE_MARGIN_MS
+#define SDI12_MASTER_RESPONSE_MARGIN_MS 0
+#endif
+#if SDI12_MASTER_MARKING_MARGIN_MS < 0 || SDI12_MASTER_RESPONSE_MARGIN_MS < 0 || \
+    SDI12_MARKING_MS + SDI12_MASTER_MARKING_MARGIN_MS > SDI12_MARKING_TIMEOUT_MS || \
+    SDI12_FIRST_BYTE_TIMEOUT_MS + SDI12_MASTER_RESPONSE_MARGIN_MS > SDI12_MARKING_TIMEOUT_MS
+#error "SDI12 master margin default outside 0..87 ms limit (§7.0)"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,25 +57,13 @@ typedef void (*sdi12_master_send_fn)(const char *data, size_t len, void *user_da
 /**
  * Receive bytes from the SDI-12 bus.
  *
- * Contract: `timeout_ms` is the time to wait for the FIRST byte only —
- * it is NOT a total-read deadline. The library passes the spec's 15 ms
- * response window here, and at 1200 baud a character alone takes
- * 8.33 ms, so a full response needs far more line time than 15 ms:
+ * `timeout_ms` bounds the wait for the FIRST byte only; replies get
+ * SDI12_FIRST_BYTE_TIMEOUT_MS plus any response margin. Then read until
+ * LF or `buflen`, ending early after a short line idle (e.g. 20 ms; §7.0
+ * allows 1.66 ms between characters). Return the byte count, 0 on timeout.
  *
- *   1. Wait up to `timeout_ms` for the first byte; if none arrives,
- *      return 0 (timeout).
- *   2. Once bytes are flowing, keep reading until a LF ('\n') arrives
- *      or `buflen` bytes accumulate, using an INTER-CHARACTER timeout
- *      (the spec allows at most 1.66 ms of marking between characters;
- *      ~10-50 ms of line-idle is a robust end-of-response signal).
- *   3. Return the accumulated bytes.
- *
- * ASCII commands read the whole response in a single call, so an
- * implementation that stops at the first-byte deadline — or returns
- * whatever sits in the UART FIFO — truncates every response. Binary
- * retrieval (aDBn!) calls repeatedly for exact byte counts and
- * tolerates partial returns, so a read that stops early at a stray
- * 0x0A payload byte is still correct there.
+ * ASCII replies must arrive in one call; binary (aDBn!) reads call
+ * repeatedly and tolerate partial returns.
  */
 typedef size_t (*sdi12_master_recv_fn)(char *buf, size_t buflen,
                                         uint32_t timeout_ms, void *user_data);
@@ -104,6 +105,8 @@ typedef struct {
     sdi12_master_callbacks_t cb;
     char                     cmd_buf[SDI12_CMD_MAX_CHARS + 4];  /**< Outgoing command buffer */
     char                     resp_buf[SDI12_RESP_MAX_CHARS + 4]; /**< Incoming response buffer */
+    uint8_t                  marking_margin_ms;   /**< Added to post-break marking */
+    uint8_t                  response_margin_ms;  /**< Added to library-timed first-byte waits */
     size_t                   resp_len;                          /**< Bytes in response buffer */
 } sdi12_master_ctx_t;
 
@@ -132,11 +135,23 @@ sdi12_err_t sdi12_master_init(sdi12_master_ctx_t *ctx,
 sdi12_err_t sdi12_master_send_break(sdi12_master_ctx_t *ctx);
 
 /**
+ * Add margin to post-break marking and to the first-byte waits the library
+ * times itself; timeouts you pass in (transact, extended) are used as given.
+ * Rejected (values kept) if either total would exceed 87 ms (§7.0);
+ * port overhead such as direction switching lands on top.
+ * @return SDI12_OK, or SDI12_ERR_INVALID_COMMAND.
+ */
+sdi12_err_t sdi12_master_set_timing_margin(sdi12_master_ctx_t *ctx,
+                                           uint8_t marking_ms,
+                                           uint8_t response_ms);
+
+/**
  * Send a raw command string and receive the response.
  *
  * @param ctx         Master context.
  * @param cmd         Command to send (e.g., "0M!").
- * @param timeout_ms  Maximum time to wait for response.
+ * @param timeout_ms  First-byte deadline, used exactly;
+ *                    SDI12_FIRST_BYTE_TIMEOUT_MS suits a normal reply.
  * @return SDI12_OK if response received, SDI12_ERR_TIMEOUT if not.
  */
 sdi12_err_t sdi12_master_transact(sdi12_master_ctx_t *ctx,
@@ -381,7 +396,8 @@ size_t sdi12_bintype_size(sdi12_bintype_t type);
  * @param xcmd       Extended command body (after 'X', before '!').
  * @param resp_buf   [out] Buffer for raw response.
  * @param resp_len   Size of resp_buf / [out] bytes received.
- * @param timeout_ms Response timeout.
+ * @param timeout_ms First-byte deadline, used exactly;
+ *                   SDI12_FIRST_BYTE_TIMEOUT_MS suits a normal reply.
  * @return SDI12_OK on success.
  */
 sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
@@ -392,8 +408,8 @@ sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
 
 /**
  * Send an extended command and collect a multi-line response.
- * Keeps receiving additional lines as long as data arrives within
- * SDI12_MULTILINE_GAP_MS (150 ms) of the previous line.
+ * Keeps receiving lines while each next line's first byte arrives within
+ * SDI12_MULTILINE_FIRST_BYTE_MS (§4.4.13.1: start bit within 150 ms).
  *
  * @param ctx          Master context.
  * @param addr         Sensor address.
@@ -402,7 +418,7 @@ sdi12_err_t sdi12_master_extended(sdi12_master_ctx_t *ctx,
  * @param resp_bufsize Size of resp_buf.
  * @param resp_len     [out] Total bytes received.
  * @param line_count   [out] Number of lines collected (NULL to ignore).
- * @param timeout_ms   Response timeout for the *first* line.
+ * @param timeout_ms   First-byte deadline for the first line, used exactly.
  * @return SDI12_OK on success.
  */
 sdi12_err_t sdi12_master_extended_multiline(sdi12_master_ctx_t *ctx,

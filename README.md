@@ -15,7 +15,7 @@ recorder)** roles — with zero external dependencies.
   structs; UART, GPIO, and timing are abstracted behind callbacks
 - ✅ **No printf** — commands and responses are built by a small internal
   byte-builder (`sdi12_fmt.h`), so no `printf` code links into your firmware
-- ✅ **196 tests** — unit + metamorphic/property-based, all runnable on
+- ✅ **210 tests** — unit + metamorphic/property-based, all runnable on
   desktop with no hardware and no external test framework
 - ✅ **Compiles anywhere** — `gcc`, `clang`, `armcc`, `arm-none-eabi-gcc`,
   MSVC, PlatformIO, Arduino, CMake, or a bare Makefile
@@ -70,6 +70,24 @@ fully §7-conformant data recorder additionally requires, **in your code**:
 - **Multi-line STX/ETX framing (§4.4.13.1)** — `sdi12_master_extended_multiline()`
   concatenates lines by timing gap and passes any STX/ETX bytes through raw.
 
+**Slow sensors and cheap transceivers** — `sdi12_master_set_timing_margin(ctx,
+marking_ms, response_ms)` (easy API: `SDI12_MASTER_MARGIN`) adds time to
+post-break marking and to every first-byte wait the library times itself,
+each capped at 87 ms. Timeouts you pass to `transact`/`extended` are used as
+given:
+
+- Call it at runtime; the `SDI12_MASTER_MARKING_MARGIN_MS` /
+  `SDI12_MASTER_RESPONSE_MARGIN_MS` defaults only apply to source builds
+  (PlatformIO `build_flags`, CMake), not the Debian shared library or the
+  Arduino IDE.
+- The break is your port's: in `send_break`, switch the direction pin first,
+  then hold `SDI12_BREAK_MS` plus your own margin. Add no marking of your
+  own; the library marks `SDI12_MARKING_MS` + margin after the callback.
+- Raise the margin from your retry loop rather than up front.
+- The marking margin is a shortcut: §7.0 lets a sensor take 100 ms to wake,
+  and §7.2 retries are the spec's answer. The reply margin tolerates sensors
+  that start replying later than §7.0's 15 ms.
+
 A sensor additionally requires, **in your code**:
 
 - **Pre-response marking (§7.0)** — `send_response` must hold the line
@@ -101,7 +119,7 @@ binary API or rebuild with `-DSDI12_BIN_MAX_PAYLOAD=<smaller>` /
 | Metadata (IM/IC) | ✅ | ❌ | ❌ |
 | Platform independent | ✅ | Arduino | Varies |
 | No `malloc` | ✅ | ❌ | Varies |
-| Test suite | 196 tests | ❌ | Minimal |
+| Test suite | 210 tests | ❌ | Minimal |
 
 ---
 
@@ -343,10 +361,10 @@ Communicate with SDI-12 sensors on the bus.
 
 void my_send(const char *data, size_t len, void *ud) { uart_tx(data, len); }
 size_t my_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud) {
-    return uart_rx(buf, max, timeout_ms);
+    return uart_rx(buf, max, timeout_ms);  /* first byte ≤ timeout_ms, then to LF */
 }
 void my_dir(sdi12_dir_t dir, void *ud) { gpio_set(DIR_PIN, dir); }
-void my_break(void *ud) { uart_send_break(12); }
+void my_break(void *ud) { uart_send_break(SDI12_BREAK_MS); }
 void my_delay(uint32_t ms, void *ud) { delay_ms(ms); }
 ```
 
@@ -513,21 +531,21 @@ Conforms to **SDI-12 v1.4** (February 20, 2023).
 
 ## Testing
 
-**196 tests** run on desktop with no hardware and no external framework —
+**210 tests** run on desktop with no hardware and no external framework —
 the suite ships its own single-header framework (`sdi12_test.h`):
 
 ```bash
 cd test
 make            # or: make CC=clang
-./test_sdi12    # 196 Tests 0 Failures
+./test_sdi12    # 210 Tests 0 Failures
 ```
 
 | Suite | Tests | What It Covers |
 |---|---:|---|
 | CRC-16 | 17 | Encode, decode, append, verify, roundtrip, spec worked examples |
 | Address | 7 | Valid/invalid ranges, boundary chars, total count |
-| Sensor | 76 | All command types, state machine, D-page pagination (incl. exact 75-char boundary), value formatting, strict grammar, abort semantics |
-| Master | 62 | Response parsing, CRC verification, address checks, scripted binary transactions, locale independence |
+| Sensor | 82 | All command types, state machine, D-page pagination (incl. exact 75-char boundary), value formatting, strict grammar, abort semantics |
+| Master | 85 | Response parsing, CRC verification, address checks, scripted binary transactions, first-byte deadlines, timing margins, locale independence |
 | Metamorphic | 19 | Property-based: mutation detection, determinism, bijection |
 
 See [TESTING.md](TESTING.md) for architecture, CMake/PlatformIO runners, and

@@ -19,7 +19,7 @@ void my_send(const char *data, size_t len, void *ud) {
 
 size_t my_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud) {
     (void)ud; (void)buf; (void)max; (void)timeout_ms;
-    /* TODO: return uart_read_until_crlf(buf, max, timeout_ms); */
+    /* TODO: wait ≤ timeout_ms for the first byte, then read to LF with a short idle timeout */
     return 0;
 }
 
@@ -30,7 +30,7 @@ void my_dir(sdi12_dir_t dir, void *ud) {
 
 void my_break(void *ud) {
     (void)ud;
-    /* TODO: hold SDI-12 line high for ≥12ms */
+    /* TODO: set direction to TX first, then hold spacing ≥ SDI12_BREAK_MS */
 }
 
 void my_delay(uint32_t ms, void *ud) {

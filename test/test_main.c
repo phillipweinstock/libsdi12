@@ -206,6 +206,20 @@ extern void test_master_parse_rejects_overlong_value(void);
 extern void test_master_parse_rejects_junk(void);
 extern void test_master_identify_measurement_wrong_address(void);
 extern void test_master_oversized_xcmd_rejected(void);
+extern void test_master_first_byte_deadline_25ms(void);
+extern void test_master_hv_binary_continuation_keeps_15ms(void);
+extern void test_master_change_address_waits_1025ms(void);
+extern void test_master_transact_explicit_timeout_exact(void);
+extern void test_master_multiline_gap_covers_first_char(void);
+extern void test_master_margins_default_zero(void);
+extern void test_master_marking_margin_extends_break_marking(void);
+extern void test_master_response_margin_extends_first_byte(void);
+extern void test_master_marking_default_is_spec(void);
+extern void test_master_response_margin_reaches_every_reply(void);
+extern void test_master_margin_skips_explicit_transact(void);
+extern void test_master_set_margin_limits(void);
+extern void test_master_margin_easy_macro(void);
+extern void test_master_ctx_layout_unchanged(void);
 
 /* test_metamorphic.c — CRC properties */
 extern void test_meta_crc_single_byte_mutation_detected(void);
@@ -393,6 +407,20 @@ int main(void)
     RUN_TEST(test_master_parse_rejects_junk);
     RUN_TEST(test_master_identify_measurement_wrong_address);
     RUN_TEST(test_master_oversized_xcmd_rejected);
+    RUN_TEST(test_master_first_byte_deadline_25ms);
+    RUN_TEST(test_master_hv_binary_continuation_keeps_15ms);
+    RUN_TEST(test_master_change_address_waits_1025ms);
+    RUN_TEST(test_master_transact_explicit_timeout_exact);
+    RUN_TEST(test_master_multiline_gap_covers_first_char);
+    RUN_TEST(test_master_margins_default_zero);
+    RUN_TEST(test_master_marking_margin_extends_break_marking);
+    RUN_TEST(test_master_response_margin_extends_first_byte);
+    RUN_TEST(test_master_marking_default_is_spec);
+    RUN_TEST(test_master_response_margin_reaches_every_reply);
+    RUN_TEST(test_master_margin_skips_explicit_transact);
+    RUN_TEST(test_master_set_margin_limits);
+    RUN_TEST(test_master_margin_easy_macro);
+    RUN_TEST(test_master_ctx_layout_unchanged);
 
     /* ── Metamorphic: CRC Properties ────────────────────────────────────── */
     RUN_TEST(test_meta_crc_single_byte_mutation_detected);

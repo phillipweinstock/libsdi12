@@ -71,6 +71,11 @@ static sdi12_err_t recv_response(sdi12_master_ctx_t *ctx, uint32_t timeout_ms)
     return SDI12_OK;
 }
 
+static uint32_t first_byte_ms(const sdi12_master_ctx_t *ctx)
+{
+    return SDI12_FIRST_BYTE_TIMEOUT_MS + ctx->response_margin_ms;
+}
+
 /** Read exactly `count` bytes using the recv callback. */
 static sdi12_err_t recv_exact(sdi12_master_ctx_t *ctx,
                                char *buf, size_t count, uint32_t timeout_ms)
@@ -112,6 +117,21 @@ sdi12_err_t sdi12_master_init(sdi12_master_ctx_t *ctx,
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->cb = *callbacks;
+    ctx->marking_margin_ms  = SDI12_MASTER_MARKING_MARGIN_MS;
+    ctx->response_margin_ms = SDI12_MASTER_RESPONSE_MARGIN_MS;
+    return SDI12_OK;
+}
+
+sdi12_err_t sdi12_master_set_timing_margin(sdi12_master_ctx_t *ctx,
+                                           uint8_t marking_ms,
+                                           uint8_t response_ms)
+{
+    if (!ctx) return SDI12_ERR_INVALID_COMMAND;
+    if ((uint32_t)SDI12_MARKING_MS + marking_ms > SDI12_MARKING_TIMEOUT_MS ||
+        (uint32_t)SDI12_FIRST_BYTE_TIMEOUT_MS + response_ms > SDI12_MARKING_TIMEOUT_MS)
+        return SDI12_ERR_INVALID_COMMAND;
+    ctx->marking_margin_ms  = marking_ms;
+    ctx->response_margin_ms = response_ms;
     return SDI12_OK;
 }
 
@@ -125,8 +145,8 @@ sdi12_err_t sdi12_master_send_break(sdi12_master_ctx_t *ctx)
 
     ctx->cb.send_break(ctx->cb.user_data);
 
-    /* Post-break marking time: ≥ 8.33ms */
-    ctx->cb.delay(SDI12_MARKING_MS, ctx->cb.user_data);
+    ctx->cb.delay(SDI12_MARKING_MS + ctx->marking_margin_ms,
+                  ctx->cb.user_data);   /* §7.0: ≥ 8.33 ms marking */
 
     return SDI12_OK;
 }
@@ -148,7 +168,7 @@ sdi12_err_t sdi12_master_query_address(sdi12_master_ctx_t *ctx, char *addr)
 {
     if (!ctx || !addr) return SDI12_ERR_INVALID_COMMAND;
 
-    sdi12_err_t err = sdi12_master_transact(ctx, "?!", SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, "?!", first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -171,7 +191,7 @@ sdi12_err_t sdi12_master_acknowledge(sdi12_master_ctx_t *ctx,
     cmd_begin(&b, cmd, sizeof(cmd), addr);
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err == SDI12_ERR_TIMEOUT) {
         *present = false;
         return SDI12_OK;
@@ -198,12 +218,9 @@ sdi12_err_t sdi12_master_change_address(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_putc(&b, new_addr);
     sdi12_sbuf_putc(&b, '!');
 
-    /* §4.4.4: the sensor responds normally, but is then allowed to be
-     * unresponsive for up to one second while it persists the address.
-     * A generous window covers slow responders too; callers should
-     * additionally wait ~1 s before the NEXT command to the sensor. */
+    /* §4.4.4: normal reply, then up to 1 s busy persisting the address */
     sdi12_err_t err = sdi12_master_transact(
-        ctx, cmd, SDI12_ADDRESS_CHANGE_DELAY_MS + SDI12_RESPONSE_TIMEOUT_MS);
+        ctx, cmd, SDI12_ADDRESS_CHANGE_DELAY_MS + first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -230,7 +247,7 @@ sdi12_err_t sdi12_master_identify(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_putc(&b, 'I');
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -336,7 +353,7 @@ sdi12_err_t sdi12_master_start_measurement(sdi12_master_ctx_t *ctx,
     }
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -380,7 +397,7 @@ sdi12_err_t sdi12_master_get_data(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_u32(&b, page, 1, '0');
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     /* Verify CRC over the raw response (address included) before parsing */
@@ -425,7 +442,7 @@ sdi12_err_t sdi12_master_continuous(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_u32(&b, index, 1, '0');
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     /* Verify CRC over the raw response (address included) before parsing */
@@ -480,7 +497,7 @@ sdi12_err_t sdi12_master_identify_measurement(sdi12_master_ctx_t *ctx,
     cmd_begin_body(&b, cmd, sizeof(cmd), addr, 'I', cmd_body);
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -508,7 +525,7 @@ sdi12_err_t sdi12_master_identify_param(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_u32(&b, param_num, 3, '0');
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     size_t len = trim_crlf(ctx->resp_buf, ctx->resp_len);
@@ -615,12 +632,11 @@ sdi12_err_t sdi12_master_extended_multiline(sdi12_master_ctx_t *ctx,
         lines = 1;
     }
 
-    /* Keep collecting lines as long as data arrives within the multi-line gap */
-    while (total < resp_bufsize) {
+    while (total < resp_bufsize) {   /* §4.4.13.1: next line within 150 ms */
         ctx->resp_len = ctx->cb.recv(ctx->resp_buf, sizeof(ctx->resp_buf) - 1,
-                                      SDI12_MULTILINE_GAP_MS, ctx->cb.user_data);
+                                      SDI12_MULTILINE_FIRST_BYTE_MS, ctx->cb.user_data);
         if (ctx->resp_len == 0)
-            break; /* no more lines — 150ms gap elapsed */
+            break;
 
         ctx->resp_buf[ctx->resp_len] = '\0';
 
@@ -798,7 +814,7 @@ sdi12_err_t sdi12_master_get_hv_data(sdi12_master_ctx_t *ctx,
     sdi12_sbuf_u32(&b, page, 1, '0');
     sdi12_sbuf_putc(&b, '!');
 
-    sdi12_err_t err = sdi12_master_transact(ctx, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    sdi12_err_t err = sdi12_master_transact(ctx, cmd, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     /* §5.1: "a three character <CRC> is appended to the data before
@@ -873,7 +889,7 @@ sdi12_err_t sdi12_master_get_hv_binary_data(sdi12_master_ctx_t *ctx,
 
     /* Read header: address(1) + packet_size(2) = 3 bytes */
     char hdr[4];
-    err = recv_exact(ctx, hdr, 3, SDI12_RESPONSE_TIMEOUT_MS);
+    err = recv_exact(ctx, hdr, 3, first_byte_ms(ctx));
     if (err != SDI12_OK) return err;
 
     uint16_t pkt_size = (uint16_t)((uint8_t)hdr[1] |

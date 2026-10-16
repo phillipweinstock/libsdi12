@@ -148,6 +148,9 @@ extern "C" {
 /** Max sensor response time after command stop bit. */
 #define SDI12_RESPONSE_TIMEOUT_MS  15
 
+/** First-byte recv deadline: §7.0 15 ms + 0.40 tol + one 8.33 ms char + 1 ms tick. */
+#define SDI12_FIRST_BYTE_TIMEOUT_MS 25
+
 /** Max inter-character gap within a message, in microseconds.
  *  §7.0 gives 1.66 ms with NO tolerance — use this for enforcement. */
 #define SDI12_INTERCHAR_MAX_US  1660
@@ -168,6 +171,9 @@ extern "C" {
 
 /** Max gap between lines in multi-line extended response. */
 #define SDI12_MULTILINE_GAP_MS 150
+
+/** Next-line first-byte deadline: §4.4.13.1 150 ms + 0.40 tol + one 8.33 ms char + 1 ms tick. */
+#define SDI12_MULTILINE_FIRST_BYTE_MS 160
 
 /** Max delay for sensor to persist new address. */
 #define SDI12_ADDRESS_CHANGE_DELAY_MS 1000

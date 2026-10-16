@@ -23,7 +23,7 @@
 #define SCAN_INTERVAL   10000   /* ms between measurements */
 #define SENSOR_ADDR     '0'
 
-/* ── RX ring buffer (filled by ISR, drained by recv callback) ──────── */
+/* ── RX ring buffer (filled by serialEvent1, drained by sdi_recv) ──── */
 
 static volatile char     rx_buf[RX_BUF_SIZE];
 static volatile uint16_t rx_head = 0;
@@ -62,20 +62,22 @@ void sdi_send(const char *data, size_t len, void *ud) {
     digitalWrite(DIR_PIN, LOW);
 }
 
-/*
- * Non-blocking receive: drains bytes from the ISR ring buffer
- * until \n is seen or timeout expires.
- */
+#define RX_IDLE_MS 20   /* §7.0: ≤1.66 ms gap + 8.33 ms char, with slack */
+
+/* Drain the RX ring: first byte within timeout_ms, then to LF or idle. */
 size_t sdi_recv(char *buf, size_t max, uint32_t timeout_ms, void *ud) {
     (void)ud;
-    unsigned long start = millis();
     size_t pos = 0;
+    unsigned long t = millis();
+    uint32_t wait = timeout_ms;               /* first byte */
 
-    while ((millis() - start) < timeout_ms && pos < max) {
+    while (pos < max && millis() - t < wait) {
+        serialEvent1();                       /* core runs it only between loop() passes */
         if (rx_available() > 0) {
-            char c = rx_read_byte();
-            buf[pos++] = c;
-            if (c == '\n') break;       /* complete response */
+            buf[pos++] = rx_read_byte();
+            if (buf[pos - 1] == '\n') break;
+            t = millis();
+            wait = RX_IDLE_MS;
         }
     }
     return pos;
@@ -88,14 +90,13 @@ void sdi_dir(sdi12_dir_t dir, void *ud) {
 
 void sdi_break(void *ud) {
     (void)ud;
-    /* Hold line at spacing (HIGH) for ≥12 ms, then marking for ≥8.33 ms */
+    /* §7.0: spacing ≥ 12 ms; the library adds post-break marking */
     digitalWrite(DIR_PIN, HIGH);
     SDI12_UART.end();
     pinMode(1, OUTPUT);
     digitalWrite(1, HIGH);              /* spacing */
     delay(15);
     digitalWrite(1, LOW);               /* marking */
-    delay(9);
     SDI12_UART.begin(1200, SERIAL_7E1);
     digitalWrite(DIR_PIN, LOW);
 }
@@ -190,7 +191,7 @@ void loop() {
     case STATE_WAITING:
         /*
          * Wait for service request (sensor sends "a\r\n" when done).
-         * The RX ISR buffers incoming bytes; sdi_recv will pick them up
+         * serialEvent1 buffers incoming bytes; sdi_recv will pick them up
          * when the library calls wait_service_request internally.
          *
          * We also have a hard timeout as a fallback.
