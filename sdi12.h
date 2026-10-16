@@ -27,8 +27,8 @@ extern "C" {
 /* ────────────────────────────────────────────────────────────────────────── */
 
 #define SDI12_LIB_VERSION_MAJOR 0
-#define SDI12_LIB_VERSION_MINOR 5
-#define SDI12_LIB_VERSION_PATCH 4
+#define SDI12_LIB_VERSION_MINOR 6
+#define SDI12_LIB_VERSION_PATCH 0
 
 /** SDI-12 protocol version this library targets. */
 #define SDI12_PROTOCOL_VERSION "14"

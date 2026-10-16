@@ -1,3 +1,19 @@
+libsdi12 (0.6.0-1) unstable; urgency=medium
+
+  * New upstream release 0.6.0:
+    - Master replies wait 25 ms for the first byte (§7.0: 15 ms start bit
+      plus 0.40 ms tolerance, one character and a 1 ms timer tick), and
+      160 ms between multi-line text lines; the old 15/150 ms deadlines
+      timed out compliant sensors on real UARTs.
+    - Example break callbacks no longer add their own post-break marking.
+    - Example master recv callbacks wait for the first byte, then read to
+      LF, instead of treating the timeout as a whole-read deadline.
+    - New sdi12_master_set_timing_margin() adds per-bus margin to
+      post-break marking and first-byte waits for slow sensors.
+    - Test suite grown from 196 to 210 tests.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Sat, 17 Oct 2026 02:33:11 +1100
+
 libsdi12 (0.5.4-1) unstable; urgency=medium
 
   * New upstream release 0.5.4:
