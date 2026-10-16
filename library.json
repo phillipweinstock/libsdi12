@@ -55,6 +55,10 @@
     ],
     "export": {
         "exclude": [
+            ".claude/",
+            ".superpowers/",
+            "research_notes/",
+            "reports/",
             "*.log",
             "debian/",
             "docs/",
